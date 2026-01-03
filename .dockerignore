@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+.github
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+*.md
+docs/
+
+# Database files (will be mounted via volume)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment files (will be passed via env_file)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+main
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+*.out
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log

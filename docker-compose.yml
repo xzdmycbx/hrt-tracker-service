@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  hrt-tracker-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hrt-tracker-service
+    restart: unless-stopped
+
+    # 从 .env 文件读取环境变量
+    env_file:
+      - .env
+
+    # 端口映射
+    ports:
+      - "${PORT:-8080}:8080"
+
+    # 数据持久化
+    volumes:
+      # 持久化数据库文件
+      - hrt-data:/app/data
+      # 持久化用户头像
+      - hrt-avatars:/app/avatars
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+    # 网络配置
+    networks:
+      - hrt-network
+
+# 定义数据卷
+volumes:
+  hrt-data:
+    driver: local
+  hrt-avatars:
+    driver: local
+
+# 定义网络
+networks:
+  hrt-network:
+    driver: bridge
