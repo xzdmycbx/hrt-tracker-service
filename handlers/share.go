@@ -105,7 +105,12 @@ func CreateShare(c *gin.Context) {
 			return
 		}
 		share.PasswordSalt = salt
-		share.PasswordHash = utils.HashPassword(req.Password, salt)
+		hash, err := utils.HashPasswordArgon2id(req.Password, salt)
+		if err != nil {
+			utils.InternalErrorResponse(c, "Failed to hash password")
+			return
+		}
+		share.PasswordHash = hash
 	}
 
 	// If copy type, snapshot the data
@@ -211,7 +216,12 @@ func UpdateSharePassword(c *gin.Context) {
 			return
 		}
 		share.PasswordSalt = salt
-		share.PasswordHash = utils.HashPassword(req.Password, salt)
+		hash, err := utils.HashPasswordArgon2id(req.Password, salt)
+		if err != nil {
+			utils.InternalErrorResponse(c, "Failed to hash password")
+			return
+		}
+		share.PasswordHash = hash
 	}
 
 	// Reset lock and attempts
@@ -290,7 +300,7 @@ func ViewShare(c *gin.Context) {
 			return
 		}
 
-		if !utils.VerifyPassword(req.Password, share.PasswordSalt, share.PasswordHash) {
+		if !utils.VerifyPasswordArgon2id(req.Password, share.PasswordSalt, share.PasswordHash) {
 			// Increment attempt count
 			share.AttemptCount++
 			if share.MaxAttempts > 0 && share.AttemptCount >= share.MaxAttempts {

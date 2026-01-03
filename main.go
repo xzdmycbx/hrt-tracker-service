@@ -29,7 +29,6 @@ func main() {
 	// CORS middleware
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
@@ -49,13 +48,26 @@ func main() {
 	// Public routes
 	public := router.Group("/api")
 	{
-		// Auth
-		public.POST("/auth/register", handlers.Register)
-		public.POST("/auth/login", handlers.Login)
-		public.POST("/auth/refresh", handlers.RefreshToken)
+		// Auth endpoints with rate limiting to prevent brute force
+		public.POST("/auth/register",
+			middleware.PublicRateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			handlers.Register)
+		public.POST("/auth/login",
+			middleware.PublicRateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			handlers.Login)
+		public.POST("/auth/refresh",
+			middleware.PublicRateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			handlers.RefreshToken)
 
-		// Public share viewing
-		public.POST("/shares/:share_id/view", handlers.ViewShare)
+		// Public share viewing with rate limiting to prevent password brute force
+		public.POST("/shares/:share_id/view",
+			middleware.PublicRateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			handlers.ViewShare)
+
+		// Public avatar access with rate limiting (防爬虫)
+		public.GET("/avatars/:username",
+			middleware.PublicRateLimitMiddleware(30, 1*time.Minute, 10*time.Minute),
+			handlers.GetAvatar)
 	}
 
 	// Protected routes (require authentication)
@@ -66,6 +78,19 @@ func main() {
 		protected.POST("/user/security-password", handlers.SetSecurityPassword)
 		protected.PUT("/user/security-password", handlers.UpdateSecurityPassword)
 		protected.GET("/user/security-password/status", handlers.GetSecurityPasswordStatus)
+
+		// Password management
+		protected.PUT("/user/password",
+			middleware.RateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			handlers.ChangePassword)
+
+		// Avatar management with rate limiting
+		protected.POST("/user/avatar",
+			middleware.RateLimitMiddleware(3, 10*time.Minute, 30*time.Minute),
+			handlers.UploadAvatar)
+		protected.DELETE("/user/avatar",
+			middleware.RateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			handlers.DeleteAvatar)
 
 		// User data with rate limiting
 		protected.POST("/user/data",

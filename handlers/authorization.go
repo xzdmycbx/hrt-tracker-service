@@ -166,7 +166,7 @@ func ViewAuthorizedData(c *gin.Context) {
 		return
 	}
 
-	if !utils.VerifyPassword(req.Password, viewer.SecurityPasswordSalt, viewer.SecurityPasswordHash) {
+	if !utils.VerifyPasswordArgon2id(req.Password, viewer.SecurityPasswordSalt, viewer.SecurityPasswordHash) {
 		utils.UnauthorizedResponse(c, "Invalid security password")
 		return
 	}

@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"hrt-tracker-service/config"
 	"hrt-tracker-service/database"
+	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/models"
 	"hrt-tracker-service/utils"
 	"regexp"
@@ -341,4 +343,100 @@ func getRealIP(c *gin.Context) string {
 	}
 
 	return c.ClientIP()
+}
+
+// ChangePasswordRequest represents the request body for changing login password
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ChangePassword handles changing user's login password
+func ChangePassword(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	currentSessionID := middleware.GetSessionID(c)
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
+
+	// Validate new password length
+	if len(req.NewPassword) < 8 {
+		utils.BadRequestResponse(c, "New password must be at least 8 characters long")
+		return
+	}
+
+	// Check password complexity
+	hasLetter := regexp.MustCompile(`[a-zA-Z]`).MatchString(req.NewPassword)
+	hasNumber := regexp.MustCompile(`[0-9]`).MatchString(req.NewPassword)
+	if !hasLetter || !hasNumber {
+		utils.BadRequestResponse(c, "Password must contain both letters and numbers")
+		return
+	}
+
+	// Prevent new password being same as old password
+	if req.OldPassword == req.NewPassword {
+		utils.BadRequestResponse(c, "New password must be different from old password")
+		return
+	}
+
+	db := database.GetDB()
+
+	// Get user
+	var user models.User
+	if err := db.First(&user, userID).Error; err != nil {
+		utils.NotFoundResponse(c, "User not found")
+		return
+	}
+
+	// Extract salt and hash from user password
+	salt, hash, err := extractSaltAndHash(user.Password)
+	if err != nil {
+		utils.InternalErrorResponse(c, "Invalid password format")
+		return
+	}
+
+	// Verify old password
+	if !utils.VerifyPassword(req.OldPassword, salt, hash) {
+		utils.UnauthorizedResponse(c, "Authentication failed")
+		return
+	}
+
+	// Generate new salt and hash for new password
+	newSalt, err := utils.GenerateSalt()
+	if err != nil {
+		utils.InternalErrorResponse(c, "Failed to generate salt")
+		return
+	}
+
+	newHash := utils.HashPassword(req.NewPassword, newSalt)
+
+	// Combine salt and hash (format: salt:hash)
+	user.Password = newSalt + ":" + newHash
+
+	// Save updated password
+	if err := db.Save(&user).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to update password")
+		return
+	}
+
+	// Revoke all other sessions for security
+	result := db.Where("user_id = ? AND session_id != ?", userID, currentSessionID).Delete(&models.RefreshToken{})
+	revokedCount := result.RowsAffected
+
+	utils.SuccessResponse(c, map[string]interface{}{
+		"message":              "Password changed successfully",
+		"other_sessions_logged_out": revokedCount,
+	})
+}
+
+// Helper: Extract salt and hash from stored password
+func extractSaltAndHash(password string) (string, string, error) {
+	parts := strings.Split(password, ":")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid password format")
+	}
+	return parts[0], parts[1], nil
 }

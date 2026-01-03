@@ -13,6 +13,7 @@ type User struct {
 	Password             string    `gorm:"not null" json:"-"`
 	SecurityPasswordHash string    `gorm:"" json:"-"`
 	SecurityPasswordSalt string    `gorm:"" json:"-"`
+	Avatar               string    `gorm:"" json:"avatar"` // Avatar file path (relative to avatars directory)
 
 	// Master key wrapping fields (only set when security password is configured)
 	MasterKeyUserWrapped   string `gorm:"type:text" json:"-"` // Ku wrapped with user's password-derived key

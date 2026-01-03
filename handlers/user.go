@@ -122,8 +122,12 @@ func SetSecurityPassword(c *gin.Context) {
 		}
 	}
 
-	// Hash the security password for verification
-	hash := utils.HashPassword(req.Password, saltUser)
+	// Hash the security password for verification using Argon2id
+	hash, err := utils.HashPasswordArgon2id(req.Password, saltUser)
+	if err != nil {
+		utils.InternalErrorResponse(c, "Failed to hash password")
+		return
+	}
 
 	// Update user with all key material (only after encryption succeeds)
 	user.SecurityPasswordSalt = saltUser
@@ -174,7 +178,7 @@ func UpdateSecurityPassword(c *gin.Context) {
 		return
 	}
 
-	if !utils.VerifyPassword(req.OldPassword, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
+	if !utils.VerifyPasswordArgon2id(req.OldPassword, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
 		utils.UnauthorizedResponse(c, "Invalid old password")
 		return
 	}
@@ -220,8 +224,12 @@ func UpdateSecurityPassword(c *gin.Context) {
 		return
 	}
 
-	// Generate new hash for password verification
-	hashNew := utils.HashPassword(req.NewPassword, saltNew)
+	// Generate new hash for password verification using Argon2id
+	hashNew, err := utils.HashPasswordArgon2id(req.NewPassword, saltNew)
+	if err != nil {
+		utils.InternalErrorResponse(c, "Failed to hash new password")
+		return
+	}
 
 	// Update user with new wrapped key and salt
 	user.MasterKeyUserWrapped = wrappedUserNew
@@ -266,8 +274,8 @@ func GetUserData(c *gin.Context) {
 			return
 		}
 
-		// Verify password
-		if !utils.VerifyPassword(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
+		// Verify password using Argon2id
+		if !utils.VerifyPasswordArgon2id(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
 			utils.UnauthorizedResponse(c, "Invalid security password")
 			return
 		}
@@ -365,7 +373,7 @@ func UpdateUserData(c *gin.Context) {
 			return
 		}
 
-		if !utils.VerifyPassword(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
+		if !utils.VerifyPasswordArgon2id(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
 			utils.UnauthorizedResponse(c, "Invalid security password")
 			return
 		}

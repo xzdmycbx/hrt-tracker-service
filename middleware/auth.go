@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"hrt-tracker-service/database"
+	"hrt-tracker-service/models"
 	"hrt-tracker-service/utils"
 	"strings"
 
@@ -31,6 +33,19 @@ func AuthMiddleware() gin.HandlerFunc {
 			utils.UnauthorizedResponse(c, "Invalid or expired token")
 			c.Abort()
 			return
+		}
+
+		// Validate session against database (prevent revoked tokens from working)
+		if claims.SessionID != "" {
+			var refreshToken models.RefreshToken
+			db := database.GetDB()
+			err := db.Where("session_id = ? AND user_id = ?", claims.SessionID, claims.UserID).First(&refreshToken).Error
+			if err != nil {
+				// Session not found or revoked
+				utils.UnauthorizedResponse(c, "Session has been revoked")
+				c.Abort()
+				return
+			}
 		}
 
 		// Store user ID and session ID in context

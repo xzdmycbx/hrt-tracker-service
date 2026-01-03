@@ -45,6 +45,11 @@ func getRateLimitKey(userID uint, ip string, method string, endpoint string) str
 	return fmt.Sprintf("%d:%s:%s:%s", userID, ip, method, endpoint)
 }
 
+// getRateLimitKeyByIP generates a unique key for rate limiting based on IP, method and endpoint (for public endpoints)
+func getRateLimitKeyByIP(ip string, method string, endpoint string) string {
+	return fmt.Sprintf("public:%s:%s:%s", ip, method, endpoint)
+}
+
 // RateLimitMiddleware creates a rate limiting middleware
 // maxRequests: maximum requests allowed
 // window: time window duration
@@ -137,5 +142,73 @@ func CleanupRateLimitStore() {
 			}
 		}
 		rateLimitMutex.Unlock()
+	}
+}
+
+// PublicRateLimitMiddleware creates a rate limiting middleware for public endpoints (IP-based only)
+// maxRequests: maximum requests allowed
+// window: time window duration
+// lockDuration: how long to lock after exceeding limit
+func PublicRateLimitMiddleware(maxRequests int, window time.Duration, lockDuration time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ip := getRealIP(c)
+		method := c.Request.Method
+		endpoint := c.FullPath()
+		key := getRateLimitKeyByIP(ip, method, endpoint)
+
+		rateLimitMutex.Lock()
+		defer rateLimitMutex.Unlock()
+
+		now := time.Now()
+		entry, exists := rateLimitStore[key]
+
+		if !exists {
+			// First request, create new entry
+			rateLimitStore[key] = &rateLimitEntry{
+				count:     1,
+				resetTime: now.Add(window),
+				locked:    false,
+			}
+			c.Next()
+			return
+		}
+
+		// Check if locked
+		if entry.locked {
+			if now.Before(entry.lockUntil) {
+				utils.TooManyRequestsResponse(c, fmt.Sprintf("Too many requests. Locked until %s", entry.lockUntil.Format(time.RFC3339)))
+				c.Abort()
+				return
+			}
+			// Lock expired, reset
+			entry.locked = false
+			entry.count = 1
+			entry.resetTime = now.Add(window)
+			c.Next()
+			return
+		}
+
+		// Check if window expired
+		if now.After(entry.resetTime) {
+			// Reset counter
+			entry.count = 1
+			entry.resetTime = now.Add(window)
+			c.Next()
+			return
+		}
+
+		// Increment counter
+		entry.count++
+
+		// Check if exceeded limit
+		if entry.count > maxRequests {
+			entry.locked = true
+			entry.lockUntil = now.Add(lockDuration)
+			utils.TooManyRequestsResponse(c, fmt.Sprintf("Too many requests. Locked for %s", lockDuration))
+			c.Abort()
+			return
+		}
+
+		c.Next()
 	}
 }

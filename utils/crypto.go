@@ -54,6 +54,38 @@ func VerifyPassword(password, salt, hash string) bool {
 	return subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1
 }
 
+// HashPasswordArgon2id hashes a password with a salt using Argon2id (for 6-digit security passwords)
+// Uses stronger parameters suitable for short passwords
+func HashPasswordArgon2id(password, salt string) (string, error) {
+	saltBytes, err := base64.StdEncoding.DecodeString(salt)
+	if err != nil {
+		return "", err
+	}
+
+	// Use stronger parameters for short 6-digit passwords
+	// Memory: 64 MB, Iterations: 4 (more than key derivation), Parallelism: 4
+	hash := argon2.IDKey(
+		[]byte(password),
+		saltBytes,
+		4,                // iterations (more than the 3 used for key derivation)
+		argon2Memory,     // 64 MB memory
+		argon2Parallelism, // 4 threads
+		argon2KeyLen,     // 32 bytes output
+	)
+
+	return base64.StdEncoding.EncodeToString(hash), nil
+}
+
+// VerifyPasswordArgon2id verifies a password against an Argon2id hash using constant-time comparison
+func VerifyPasswordArgon2id(password, salt, hash string) bool {
+	computedHash, err := HashPasswordArgon2id(password, salt)
+	if err != nil {
+		return false
+	}
+	// Use constant-time comparison to prevent timing attacks
+	return subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1
+}
+
 // EncryptData encrypts data using AES-256-GCM with a password
 func EncryptData(data, password string) (string, error) {
 	// Derive key from password
@@ -235,3 +267,64 @@ func UnwrapKey(wrappedKey string, kek []byte, aad string) ([]byte, error) {
 
 	return plainKey, nil
 }
+
+// EncryptDataWithKey encrypts data using a specific key (for use with unwrapped master key)
+func EncryptDataWithKey(data string, key []byte) (string, error) {
+	// Create cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	// Create nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	// Encrypt (nonce || ciphertext || tag)
+	ciphertext := gcm.Seal(nonce, nonce, []byte(data), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptDataWithKey decrypts data using a specific key (for use with unwrapped master key)
+func DecryptDataWithKey(encryptedData string, key []byte) (string, error) {
+	// Decode base64
+	data, err := base64.StdEncoding.DecodeString(encryptedData)
+	if err != nil {
+		return "", err
+	}
+
+	// Create cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	if len(data) < gcm.NonceSize() {
+		return "", errors.New("invalid ciphertext")
+	}
+
+	// Extract nonce and encrypted data
+	nonce := data[:gcm.NonceSize()]
+	ciphertext := data[gcm.NonceSize():]
+
+	// Decrypt
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
+
