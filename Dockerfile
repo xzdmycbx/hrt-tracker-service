@@ -16,6 +16,9 @@ RUN go mod download
 # 复制源代码
 COPY . .
 
+# 设置 CGO 编译标志以兼容 Alpine musl
+ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
+
 # 构建应用
 RUN CGO_ENABLED=1 GOOS=linux go build -tags="sqlite_omit_load_extension" -ldflags="-s -w" -o main .
 
