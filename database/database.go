@@ -21,6 +21,13 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
+	// Verify directory is writable by attempting to create a test file
+	testFile := filepath.Join(dir, ".write_test")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		return err
+	}
+	os.Remove(testFile) // Clean up test file
+
 	// Open database connection
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),

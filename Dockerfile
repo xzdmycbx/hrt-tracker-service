@@ -26,7 +26,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -tags="sqlite_omit_load_extension" -ldflag
 FROM alpine:latest
 
 # 安装运行时依赖
-RUN apk --no-cache add ca-certificates sqlite-libs wget
+RUN apk --no-cache add ca-certificates sqlite-libs wget su-exec
 
 # 创建非 root 用户
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -37,11 +37,12 @@ WORKDIR /app
 # 从构建阶段复制二进制文件
 COPY --from=builder /app/main .
 
+# 复制入口脚本
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # 创建数据和头像目录并设置权限
 RUN mkdir -p /app/data /app/avatars && chown -R appuser:appgroup /app
-
-# 切换到非 root 用户
-USER appuser
 
 # 暴露端口
 EXPOSE 8080
@@ -49,6 +50,9 @@ EXPOSE 8080
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
+# 使用入口脚本来确保卷的权限正确
+ENTRYPOINT ["/entrypoint.sh"]
 
 # 运行应用
 CMD ["./main"]
