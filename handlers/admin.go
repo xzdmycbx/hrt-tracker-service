@@ -35,7 +35,7 @@ func ServerDecryptUserData(userID uint) (string, error) {
 
 	if !userData.IsEncrypted {
 		// Data is not encrypted, return as-is
-		return userData.Data, nil
+		return userData.EncryptedData, nil
 	}
 
 	// Get server master key for this user's version
@@ -102,7 +102,6 @@ func ServerUpdateUserData(userID uint, newData string) error {
 		// Create new user data if doesn't exist
 		userData = models.UserData{
 			UserID:        userID,
-			Data:          newData,
 			EncryptedData: encryptedData,
 			IsEncrypted:   true,
 		}
@@ -110,7 +109,6 @@ func ServerUpdateUserData(userID uint, newData string) error {
 	}
 
 	// Update existing data
-	userData.Data = newData
 	userData.EncryptedData = encryptedData
 	userData.IsEncrypted = true
 	return db.Save(&userData).Error
