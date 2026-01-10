@@ -40,10 +40,12 @@ func main() {
 		c.Next()
 	})
 
-	// Health check
-	router.GET("/health", func(c *gin.Context) {
+	// Health check endpoint (支持 GET 和 HEAD 请求，用于 Docker healthcheck)
+	healthHandler := func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
-	})
+	}
+	router.GET("/health", healthHandler)
+	router.HEAD("/health", healthHandler)
 
 	// Public routes
 	public := router.Group("/api")

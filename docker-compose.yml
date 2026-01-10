@@ -16,12 +16,12 @@ services:
     ports:
       - "${PORT:-8080}:8080"
 
-    # 数据持久化
+    # 数据持久化（绑定挂载到当前目录，便于备份）
     volumes:
-      # 持久化数据库文件
-      - hrt-data:/app/data
-      # 持久化用户头像
-      - hrt-avatars:/app/avatars
+      # 持久化数据库文件到 ./data 目录
+      - ./data:/app/data
+      # 持久化用户头像到 ./avatars 目录
+      - ./avatars:/app/avatars
 
     # 健康检查
     healthcheck:
@@ -34,13 +34,6 @@ services:
     # 网络配置
     networks:
       - hrt-network
-
-# 定义数据卷
-volumes:
-  hrt-data:
-    driver: local
-  hrt-avatars:
-    driver: local
 
 # 定义网络
 networks:
