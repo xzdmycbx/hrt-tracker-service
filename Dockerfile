@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # 构建应用
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o main .
+RUN CGO_ENABLED=1 GOOS=linux go build -tags="sqlite_omit_load_extension" -ldflags="-s -w" -o main .
 
 # Runtime stage
 FROM alpine:latest
