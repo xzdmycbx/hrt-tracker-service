@@ -16,7 +16,6 @@ type Config struct {
 	JWTAccessSecret               string
 	JWTRefreshSecret              string
 	AccessTokenExpireHours        int
-	RefreshTokenExpireHours       int
 	MasterKeyServerCurrentVersion int // Current version of server master key
 }
 
@@ -29,7 +28,6 @@ func LoadConfig() {
 	}
 
 	accessExpire, _ := strconv.Atoi(getEnv("ACCESS_TOKEN_EXPIRE_HOURS", "1"))
-	refreshExpire, _ := strconv.Atoi(getEnv("REFRESH_TOKEN_EXPIRE_HOURS", "168"))
 	masterKeyVersion, _ := strconv.Atoi(getEnv("MASTER_KEY_SERVER_CURRENT_VERSION", "1"))
 
 	// Get required secrets (no defaults)
@@ -42,7 +40,6 @@ func LoadConfig() {
 		JWTAccessSecret:               jwtAccessSecret,
 		JWTRefreshSecret:              jwtRefreshSecret,
 		AccessTokenExpireHours:        accessExpire,
-		RefreshTokenExpireHours:       refreshExpire,
 		MasterKeyServerCurrentVersion: masterKeyVersion,
 	}
 

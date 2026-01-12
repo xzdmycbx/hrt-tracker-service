@@ -36,7 +36,6 @@ DB_PATH=./data/hrt-tracker.db
 JWT_ACCESS_SECRET=你的访问令牌密钥-生产环境请修改
 JWT_REFRESH_SECRET=你的刷新令牌密钥-生产环境请修改
 ACCESS_TOKEN_EXPIRE_HOURS=1
-REFRESH_TOKEN_EXPIRE_HOURS=168
 ```
 
 **生产环境重要提示：**
@@ -130,7 +129,6 @@ hrt-tracker-service/
 | `JWT_ACCESS_SECRET` | 访问令牌密钥 | （必须设置） |
 | `JWT_REFRESH_SECRET` | 刷新令牌密钥 | （必须设置） |
 | `ACCESS_TOKEN_EXPIRE_HOURS` | 访问令牌过期时间 | `1` |
-| `REFRESH_TOKEN_EXPIRE_HOURS` | 刷新令牌过期时间 | `168`（7天） |
 
 ## 数据库
 

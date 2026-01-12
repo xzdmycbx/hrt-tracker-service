@@ -52,23 +52,23 @@ func main() {
 	{
 		// Auth endpoints with rate limiting to prevent brute force
 		public.POST("/auth/register",
-			middleware.PublicRateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			middleware.PublicRateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.Register)
 		public.POST("/auth/login",
-			middleware.PublicRateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			middleware.PublicRateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.Login)
 		public.POST("/auth/refresh",
-			middleware.PublicRateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			middleware.PublicRateLimitMiddleware(50, 5*time.Minute, 15*time.Minute),
 			handlers.RefreshToken)
 
 		// Public share viewing with rate limiting to prevent password brute force
 		public.POST("/shares/:share_id/view",
-			middleware.PublicRateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			middleware.PublicRateLimitMiddleware(50, 5*time.Minute, 15*time.Minute),
 			handlers.ViewShare)
 
 		// Public avatar access with rate limiting (防爬虫)
 		public.GET("/avatars/:username",
-			middleware.PublicRateLimitMiddleware(30, 1*time.Minute, 10*time.Minute),
+			middleware.PublicRateLimitMiddleware(150, 1*time.Minute, 10*time.Minute),
 			handlers.GetAvatar)
 	}
 
@@ -83,34 +83,35 @@ func main() {
 
 		// Password management
 		protected.PUT("/user/password",
-			middleware.RateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.ChangePassword)
 
 		// Avatar management with rate limiting
 		protected.POST("/user/avatar",
-			middleware.RateLimitMiddleware(3, 10*time.Minute, 30*time.Minute),
+			middleware.RateLimitMiddleware(15, 10*time.Minute, 30*time.Minute),
 			handlers.UploadAvatar)
 		protected.DELETE("/user/avatar",
-			middleware.RateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.DeleteAvatar)
 
 		// User data with rate limiting
 		protected.POST("/user/data",
-			middleware.RateLimitMiddleware(10, 1*time.Minute, 5*time.Minute),
+			middleware.RateLimitMiddleware(200, 1*time.Minute, 5*time.Minute),
 			handlers.GetUserData)
 		protected.PUT("/user/data",
-			middleware.RateLimitMiddleware(20, 1*time.Minute, 5*time.Minute),
+			middleware.RateLimitMiddleware(100, 1*time.Minute, 5*time.Minute),
 			handlers.UpdateUserData)
 
 		// Session management with rate limiting
 		protected.GET("/auth/sessions",
-			middleware.RateLimitMiddleware(30, 1*time.Minute, 5*time.Minute),
+			middleware.RateLimitMiddleware(150, 1*time.Minute, 5*time.Minute),
 			handlers.GetSessions)
+		protected.POST("/auth/logout", handlers.Logout)
 		protected.DELETE("/auth/sessions/:session_id",
-			middleware.RateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			middleware.RateLimitMiddleware(50, 5*time.Minute, 15*time.Minute),
 			handlers.RevokeSession)
 		protected.DELETE("/auth/sessions",
-			middleware.RateLimitMiddleware(5, 5*time.Minute, 15*time.Minute),
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.RevokeAllOtherSessions)
 
 		// Share management
