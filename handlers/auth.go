@@ -91,16 +91,6 @@ func Register(c *gin.Context) {
 	}
 	db.Create(&userData)
 
-	// Limit to 2 devices: if user has 2 or more refresh tokens, delete the oldest one
-	// (This is defensive - new user should have no tokens, but keeping consistency)
-	var tokenCount int64
-	db.Model(&models.RefreshToken{}).Where("user_id = ?", user.ID).Count(&tokenCount)
-	if tokenCount >= 2 {
-		var oldestToken models.RefreshToken
-		db.Where("user_id = ?", user.ID).Order("created_at ASC").First(&oldestToken)
-		db.Delete(&oldestToken)
-	}
-
 	// Get session information
 	sessionID := generateSessionID()
 	deviceInfo := parseDeviceInfo(c.GetHeader("User-Agent"))
@@ -122,7 +112,7 @@ func Register(c *gin.Context) {
 	refreshTokenModel := models.RefreshToken{
 		UserID:     user.ID,
 		Token:      utils.HashRefreshToken(refreshToken),
-		ExpiresAt:  time.Now().Add(time.Hour * time.Duration(config.AppConfig.RefreshTokenExpireHours)),
+		ExpiresAt:  time.Time{},
 		SessionID:  sessionID,
 		DeviceInfo: deviceInfo,
 		IPAddress:  ipAddress,
@@ -167,16 +157,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Limit to 2 devices: if user has 2 or more refresh tokens, delete the oldest one
-	var tokenCount int64
-	db.Model(&models.RefreshToken{}).Where("user_id = ?", user.ID).Count(&tokenCount)
-	if tokenCount >= 2 {
-		// Delete the oldest refresh token
-		var oldestToken models.RefreshToken
-		db.Where("user_id = ?", user.ID).Order("created_at ASC").First(&oldestToken)
-		db.Delete(&oldestToken)
-	}
-
 	// Get session information
 	sessionID := generateSessionID()
 	deviceInfo := parseDeviceInfo(c.GetHeader("User-Agent"))
@@ -198,7 +178,7 @@ func Login(c *gin.Context) {
 	refreshTokenModel := models.RefreshToken{
 		UserID:     user.ID,
 		Token:      utils.HashRefreshToken(refreshToken),
-		ExpiresAt:  time.Now().Add(time.Hour * time.Duration(config.AppConfig.RefreshTokenExpireHours)),
+		ExpiresAt:  time.Time{},
 		SessionID:  sessionID,
 		DeviceInfo: deviceInfo,
 		IPAddress:  ipAddress,
@@ -224,7 +204,7 @@ func RefreshToken(c *gin.Context) {
 	// Validate refresh token
 	claims, err := utils.ValidateRefreshToken(req.RefreshToken)
 	if err != nil {
-		utils.UnauthorizedResponse(c, "Invalid or expired refresh token")
+		utils.UnauthorizedResponse(c, "Invalid refresh token")
 		return
 	}
 
@@ -262,7 +242,7 @@ func RefreshToken(c *gin.Context) {
 	newTokenModel := models.RefreshToken{
 		UserID:     claims.UserID,
 		Token:      utils.HashRefreshToken(newRefreshToken),
-		ExpiresAt:  time.Now().Add(time.Hour * time.Duration(config.AppConfig.RefreshTokenExpireHours)),
+		ExpiresAt:  time.Time{},
 		SessionID:  sessionID,
 		DeviceInfo: deviceInfo,
 		IPAddress:  ipAddress,
@@ -354,8 +334,6 @@ type ChangePasswordRequest struct {
 // ChangePassword handles changing user's login password
 func ChangePassword(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-	currentSessionID := middleware.GetSessionID(c)
-
 	var req ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequestResponse(c, "Invalid request body")
@@ -422,13 +400,18 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
-	// Revoke all other sessions for security
-	result := db.Where("user_id = ? AND session_id != ?", userID, currentSessionID).Delete(&models.RefreshToken{})
-	revokedCount := result.RowsAffected
+	var tokenCount int64
+	db.Model(&models.RefreshToken{}).Where("user_id = ?", userID).Count(&tokenCount)
+	db.Where("user_id = ?", userID).Delete(&models.RefreshToken{})
+
+	otherSessionsLoggedOut := int64(0)
+	if tokenCount > 0 {
+		otherSessionsLoggedOut = tokenCount - 1
+	}
 
 	utils.SuccessResponse(c, map[string]interface{}{
-		"message":              "Password changed successfully",
-		"other_sessions_logged_out": revokedCount,
+		"message":                   "Password changed successfully",
+		"other_sessions_logged_out": otherSessionsLoggedOut,
 	})
 }
 
