@@ -9,6 +9,7 @@ import (
 	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/models"
 	"hrt-tracker-service/utils"
+	"io"
 	"regexp"
 
 	"github.com/gin-gonic/gin"
@@ -246,7 +247,10 @@ func UpdateSecurityPassword(c *gin.Context) {
 func GetUserData(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	var req GetUserDataRequest
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
 
 	db := database.GetDB()
 
@@ -255,6 +259,20 @@ func GetUserData(c *gin.Context) {
 	if err := db.First(&user, userID).Error; err != nil {
 		utils.NotFoundResponse(c, "User not found")
 		return
+	}
+
+	// If security password is set, validate it even when no data exists yet
+	hasSecurityPassword := user.SecurityPasswordHash != ""
+	if hasSecurityPassword {
+		if req.Password == "" {
+			utils.BadRequestResponse(c, "Security password required")
+			return
+		}
+
+		if !utils.VerifyPasswordArgon2id(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
+			utils.UnauthorizedResponse(c, "Invalid security password")
+			return
+		}
 	}
 
 	// Get user data
@@ -269,14 +287,8 @@ func GetUserData(c *gin.Context) {
 
 	// If encrypted, require password
 	if userData.IsEncrypted {
-		if req.Password == "" {
+		if !hasSecurityPassword {
 			utils.BadRequestResponse(c, "Security password required")
-			return
-		}
-
-		// Verify password using Argon2id
-		if !utils.VerifyPasswordArgon2id(req.Password, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
-			utils.UnauthorizedResponse(c, "Invalid security password")
 			return
 		}
 
