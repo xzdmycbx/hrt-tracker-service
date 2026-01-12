@@ -59,6 +59,19 @@ func GetSessions(c *gin.Context) {
 	})
 }
 
+// Logout revokes the current session's refresh token
+func Logout(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	currentSessionID := middleware.GetSessionID(c)
+	db := database.GetDB()
+
+	result := db.Where("user_id = ? AND session_id = ?", userID, currentSessionID).Delete(&models.RefreshToken{})
+
+	utils.SuccessMessageResponse(c, "Logged out successfully", map[string]interface{}{
+		"revoked_count": result.RowsAffected,
+	})
+}
+
 // RevokeSession revokes a specific session (requires login password)
 func RevokeSession(c *gin.Context) {
 	userID := middleware.GetUserID(c)

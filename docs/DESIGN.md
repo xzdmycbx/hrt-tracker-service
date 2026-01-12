@@ -261,13 +261,13 @@ func GetServerKey(version int) ([]byte, error) {
 ### 1.7 限流规范
 
 #### 数据访问接口
-- **POST /user/data（读取）**：10 次/分钟
-- **PUT /user/data（更新）**：20 次/分钟
+- **POST /user/data（读取）**：200 次/分钟
+- **PUT /user/data（更新）**：100 次/分钟
 
 #### 会话管理接口
-- **GET /auth/sessions**：30 次/分钟
-- **DELETE /auth/sessions/:id**：10 次/5分钟
-- **DELETE /auth/sessions（批量）**：5 次/5分钟
+- **GET /auth/sessions**：150 次/分钟
+- **DELETE /auth/sessions/:id**：50 次/5分钟
+- **DELETE /auth/sessions（批量）**：25 次/5分钟
 
 #### 限流策略
 - 基于：用户 ID + IP 地址
@@ -379,7 +379,7 @@ type RefreshToken struct {
 **说明**：
 - 不允许踢出当前设备（防止误操作）
 - **改进**：使用登录密码验证，而非安全密码（所有用户都有登录密码）
-- **限流**：5 分钟内最多 10 次尝试，超过则锁定 15 分钟
+- **限流**：5 分钟内最多 50 次尝试，超过则锁定 15 分钟
 
 #### 2.3.3 DELETE /auth/sessions
 踢出所有其他设备（只保留当前设备）
@@ -412,7 +412,7 @@ type RefreshToken struct {
 **说明**：
 - 删除除当前设备外的所有 refresh token
 - **改进**：使用登录密码验证，而非安全密码
-- **限流**：5 分钟内最多 5 次尝试，超过则锁定 15 分钟
+- **限流**：5 分钟内最多 25 次尝试，超过则锁定 15 分钟
 
 ### 2.4 设备信息解析
 
@@ -443,7 +443,7 @@ type RefreshToken struct {
 3. **足够的安全性**：验证登录密码 + Bearer Token 双重验证
 
 #### 限流机制
-- **单设备踢出**：5 分钟内最多 10 次尝试
+- **单设备踢出**：5 分钟内最多 50 次尝试
 - **批量踢出**：5 分钟内最多 5 次尝试
 - **锁定时长**：超限后锁定 15 分钟
 - **计数器**：基于用户 ID + IP 地址

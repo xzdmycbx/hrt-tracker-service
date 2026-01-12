@@ -24,7 +24,6 @@ DB_PATH=./data/hrt-tracker.db
 JWT_ACCESS_SECRET=your-strong-access-secret-change-in-production
 JWT_REFRESH_SECRET=your-strong-refresh-secret-change-in-production
 ACCESS_TOKEN_EXPIRE_HOURS=1
-REFRESH_TOKEN_EXPIRE_HOURS=168
 
 # 服务端主密钥（请使用 openssl rand -hex 32 生成）
 MASTER_KEY_SERVER_V1=your-256-bit-hex-key-here-64-characters-long
