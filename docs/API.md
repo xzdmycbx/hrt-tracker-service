@@ -560,6 +560,7 @@ Authorization: Bearer <access_token>
 {
   "share_type": "realtime|copy",
   "password": "string (6位数字，可选)",
+  "security_password": "string (6位数字，创建副本分享且已设置安全密码时必填)",
   "max_attempts": "number (可选，默认：有密码时为5，无密码时为0)"
 }
 ```
@@ -576,8 +577,9 @@ Authorization: Bearer <access_token>
 ```
 
 **错误响应：**
-- `400` - 请求体无效 / 分享类型无效 / 密码必须是6位数字 / max_attempts 不能为负数 / 实时分享已存在 / 无法创建包含加密数据的副本分享
+- `400` - 请求体无效 / 分享类型无效 / 密码必须是6位数字 / 安全密码必须是6位数字 / max_attempts 不能为负数 / 实时分享已存在 / 创建副本分享需要安全密码
 - `401` - 未授权
+- `401` - 安全密码错误
 - `500` - 服务器内部错误（生成盐值或创建分享失败）
 
 **说明：**
@@ -588,7 +590,8 @@ Authorization: Bearer <access_token>
 - 如果不提供 `password`，分享将是公开的（无需密码即可查看）。
 - **重要：** 如果设置了 `password` 但未设置 `max_attempts`（或设置为 0），系统将自动设为 5 次尝试以防止暴力破解。
 - `max_attempts` 不能为负数。
-- 无法创建包含加密数据的副本分享。实时分享也无法显示加密数据。
+- 已设置安全密码的用户创建副本分享时必须提供自己的安全密码，用于解密快照数据（不会使用分享密码或系统加密密码）。
+- 实时分享无法显示已加密数据，且用户设置安全密码后实时分享会失效。
 
 ---
 
@@ -743,7 +746,11 @@ Authorization: Bearer <access_token>
   "success": true,
   "data": {
     "data": { /* 分享的 JSON 数据 */ },
-    "share_type": "realtime|copy"
+    "share_type": "realtime|copy",
+    "owner": {
+      "owner_username": "string",
+      "owner_avatar": "string"
+    }
   }
 }
 ```
@@ -751,7 +758,7 @@ Authorization: Bearer <access_token>
 **错误响应：**
 - `400` - 需要密码（分享已设置密码保护）
 - `401` - 密码错误
-- `403` - 分享已锁定 / 所有者的数据已加密
+- `403` - 分享已锁定 / 所有者的数据已加密 / 实时分享已因设置安全密码失效
 - `404` - 分享不存在
 - `500` - 服务器内部错误（解析数据失败）
 
@@ -760,157 +767,13 @@ Authorization: Bearer <access_token>
 - 每次密码验证失败（包括未提供密码）都会增加 `attempt_count`。
 - 如果 `attempt_count` 达到 `max_attempts`，分享将被锁定。
 - 实时分享无法显示已加密的所有者数据。
-- 副本分享无法在创建时包含加密数据。
+- 副本分享在创建时会在校验安全密码后生成解密后的快照。
 
 ---
 
 ### 4. 授权管理
 
-#### 4.1 授权其他用户
-授权另一个用户查看你的数据。
-
-**接口：** `POST /authorizations`
-
-**需要认证：** 是
-
-**请求体：**
-```json
-{
-  "viewer_username": "string"
-}
-```
-
-**成功响应 (200)：**
-```json
-{
-  "success": true,
-  "message": "授权成功",
-  "data": {
-    "viewer_username": "string"
-  }
-}
-```
-
-**错误响应：**
-- `400` - 请求体无效 / 授权已存在
-- `401` - 未授权
-- `404` - 查看者用户不存在
-- `500` - 服务器内部错误（创建授权失败）
-
----
-
-#### 4.2 撤销授权
-撤销对某用户的授权。
-
-**接口：** `DELETE /authorizations/:viewer_username`
-
-**需要认证：** 是
-
-**URL 参数：**
-- `viewer_username` - 要撤销授权的用户名
-
-**成功响应 (200)：**
-```json
-{
-  "success": true,
-  "message": "授权撤销成功"
-}
-```
-
-**错误响应：**
-- `401` - 未授权
-- `404` - 查看者用户不存在 / 授权不存在
-
----
-
-#### 4.3 获取我授权的用户列表
-获取你已授权的所有用户列表。
-
-**接口：** `GET /authorizations/granted`
-
-**需要认证：** 是
-
-**成功响应 (200)：**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "viewer_username": "string",
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ]
-}
-```
-
-**错误响应：**
-- `401` - 未授权
-
----
-
-#### 4.4 获取授权我的用户列表
-获取已授权你查看其数据的所有用户列表。
-
-**接口：** `GET /authorizations/received`
-
-**需要认证：** 是
-
-**成功响应 (200)：**
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "owner_username": "string",
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ]
-}
-```
-
-**错误响应：**
-- `401` - 未授权
-
----
-
-#### 4.5 查看已授权的数据
-查看已授权你的用户的数据。
-
-**接口：** `POST /authorizations/view`
-
-**需要认证：** 是
-
-**请求体：**
-```json
-{
-  "owner_username": "string",
-  "password": "string (你自己的6位数字安全密码)"
-}
-```
-
-**成功响应 (200)：**
-```json
-{
-  "success": true,
-  "data": {
-    "data": { /* 所有者的 JSON 数据，无数据时为 null */ },
-    "owner": "string",
-    "is_encrypted": false
-  }
-}
-```
-
-**错误响应：**
-- `400` - 请求体无效 / 你必须先设置安全密码
-- `401` - 未授权 / 安全密码错误
-- `403` - 未被授权查看 / 所有者的数据已加密
-- `404` - 所有者用户不存在 / 查看者不存在
-- `500` - 服务器内部错误（解析数据失败）
-
-**说明：**
-- 你必须提供**你自己的**安全密码来查看已授权的数据。
-- 无法查看已加密其数据的所有者的数据。
-- 如果所有者未存储数据，`data` 字段将为 `null`。
+授权管理功能已停用。所有 `authorizations` 相关接口均返回 `400` 错误（功能已禁用）。
 
 ---
 
@@ -930,7 +793,6 @@ Authorization: Bearer <access_token>
 2. **刷新令牌（Refresh Token）**：默认长期有效，直到用户修改登录密码或通过注销/踢出操作使其失效。用于获取新的访问令牌。
 3. **安全密码（Security Password）**：6位数字密码，用于：
    - 加密/解密你自己的数据
-   - 查看已授权数据时验证身份
 4. **分享密码（Share Password）**：可选的6位数字密码，用于控制分享访问。
 5. **密码存储**：所有密码使用 PBKDF2 + 盐值进行哈希存储。
 6. **数据加密**：使用 AES-256-GCM 加密用户数据。
@@ -953,7 +815,7 @@ Authorization: Bearer <access_token>
 
 ### 示例 2：创建并分享数据
 ```
-1. POST /shares { share_type: "copy", password: "654321" }
+1. POST /shares { share_type: "copy", password: "654321", security_password: "123456" }
    → 获得 share_id
 
 2. 将 share_id 分享给他人
@@ -964,11 +826,7 @@ Authorization: Bearer <access_token>
 
 ### 示例 3：授权其他用户
 ```
-1. POST /authorizations { viewer_username: "friend" }
-   → 授予授权
-
-2. 朋友访问：POST /authorizations/view { owner_username: "you", password: "their_password" }
-   → 朋友可以查看你的数据（如果未加密）
+（该功能已停用）
 ```
 
 ---
