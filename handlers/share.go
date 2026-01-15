@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"hrt-tracker-service/database"
 	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/models"
@@ -14,9 +15,10 @@ import (
 )
 
 type CreateShareRequest struct {
-	ShareType   string `json:"share_type" binding:"required"` // "realtime" or "copy"
-	Password    string `json:"password"`
-	MaxAttempts int    `json:"max_attempts"`
+	ShareType        string `json:"share_type" binding:"required"` // "realtime" or "copy"
+	Password         string `json:"password"`
+	SecurityPassword string `json:"security_password"`
+	MaxAttempts      int    `json:"max_attempts"`
 }
 
 type UpdateSharePasswordRequest struct {
@@ -58,6 +60,12 @@ func CreateShare(c *gin.Context) {
 	// Validate password if provided
 	if req.Password != "" && !regexp.MustCompile(`^\d{6}$`).MatchString(req.Password) {
 		utils.BadRequestResponse(c, "Share password must be exactly 6 digits")
+		return
+	}
+
+	// Validate security password if provided
+	if req.SecurityPassword != "" && !regexp.MustCompile(`^\d{6}$`).MatchString(req.SecurityPassword) {
+		utils.BadRequestResponse(c, "Security password must be exactly 6 digits")
 		return
 	}
 
@@ -115,14 +123,61 @@ func CreateShare(c *gin.Context) {
 
 	// If copy type, snapshot the data
 	if req.ShareType == "copy" {
+		var user models.User
+		if err := db.First(&user, userID).Error; err != nil {
+			utils.NotFoundResponse(c, "User not found")
+			return
+		}
+
+		hasSecurityPassword := user.SecurityPasswordHash != ""
+		if hasSecurityPassword {
+			if req.SecurityPassword == "" {
+				utils.BadRequestResponse(c, "Security password required for copy share")
+				return
+			}
+
+			if !utils.VerifyPasswordArgon2id(req.SecurityPassword, user.SecurityPasswordSalt, user.SecurityPasswordHash) {
+				utils.UnauthorizedResponse(c, "Invalid security password")
+				return
+			}
+		}
+
 		var userData models.UserData
 		if err := db.Where("user_id = ?", userID).First(&userData).Error; err == nil {
 			// Cannot share encrypted data
 			if userData.IsEncrypted {
-				utils.BadRequestResponse(c, "Cannot create copy share with encrypted data. Please decrypt your data first.")
-				return
+				if !hasSecurityPassword {
+					utils.BadRequestResponse(c, "Security password required")
+					return
+				}
+
+				if user.MasterKeyServerWrapped == "" {
+					utils.BadRequestResponse(c, "Dual key wrapping not initialized. Please contact support.")
+					return
+				}
+
+				kekUser, err := utils.DeriveKeyArgon2id(req.SecurityPassword, user.MasterKeySalt)
+				if err != nil {
+					utils.InternalErrorResponse(c, "Failed to derive key")
+					return
+				}
+
+				aadUser := fmt.Sprintf("user:%d", userID)
+				masterKey, err := utils.UnwrapKey(user.MasterKeyUserWrapped, kekUser, aadUser)
+				if err != nil {
+					utils.UnauthorizedResponse(c, "Failed to unwrap master key")
+					return
+				}
+
+				decrypted, err := decryptDataWithMasterKey(userData.EncryptedData, masterKey)
+				if err != nil {
+					utils.InternalErrorResponse(c, "Failed to decrypt data")
+					return
+				}
+				share.SnapshotData = decrypted
+			} else {
+				share.SnapshotData = userData.EncryptedData
 			}
-			share.SnapshotData = userData.EncryptedData
 		}
 	}
 
@@ -313,6 +368,22 @@ func ViewShare(c *gin.Context) {
 		}
 	}
 
+	var owner models.User
+	if err := db.Select("username", "avatar", "security_password_hash").First(&owner, share.UserID).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to load share owner")
+		return
+	}
+
+	if share.ShareType == "realtime" && owner.SecurityPasswordHash != "" {
+		utils.ForbiddenResponse(c, "Owner has security password set; realtime share is disabled")
+		return
+	}
+
+	baseResponse := map[string]interface{}{
+		"owner_username": owner.Username,
+		"owner_avatar":   owner.Avatar,
+	}
+
 	// Get data based on share type
 	var data map[string]interface{}
 	if share.ShareType == "realtime" {
@@ -326,6 +397,7 @@ func ViewShare(c *gin.Context) {
 			utils.SuccessResponse(c, map[string]interface{}{
 				"data":       nil,
 				"share_type": "realtime",
+				"owner":      baseResponse,
 			})
 			return
 		}
@@ -338,6 +410,7 @@ func ViewShare(c *gin.Context) {
 			utils.SuccessResponse(c, map[string]interface{}{
 				"data":       nil,
 				"share_type": "realtime",
+				"owner":      baseResponse,
 			})
 			return
 		}
@@ -365,6 +438,7 @@ func ViewShare(c *gin.Context) {
 			utils.SuccessResponse(c, map[string]interface{}{
 				"data":       nil,
 				"share_type": "copy",
+				"owner":      baseResponse,
 			})
 			return
 		}
@@ -382,5 +456,6 @@ func ViewShare(c *gin.Context) {
 	utils.SuccessResponse(c, map[string]interface{}{
 		"data":       data,
 		"share_type": share.ShareType,
+		"owner":      baseResponse,
 	})
 }

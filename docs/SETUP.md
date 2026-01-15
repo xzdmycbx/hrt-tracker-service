@@ -103,7 +103,7 @@ hrt-tracker-service/
 │   ├── auth.go          # 认证接口
 │   ├── user.go          # 用户管理接口
 │   ├── share.go         # 分享管理接口
-│   └── authorization.go # 授权接口
+│   └── authorization.go # 授权接口（已停用）
 ├── middleware/          # HTTP 中间件
 │   └── auth.go          # JWT 认证中间件
 ├── utils/               # 工具函数
@@ -141,7 +141,7 @@ hrt-tracker-service/
 - `user_data` - 用户 JSON 数据（如设置安全密码则加密）
 - `refresh_tokens` - 用于认证的刷新令牌
 - `shares` - 数据分享（实时和副本）
-- `authorizations` - 用户授权
+- `authorizations` - 用户授权（已停用）
 
 ### 重置数据库
 
