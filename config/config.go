@@ -16,7 +16,10 @@ type Config struct {
 	JWTAccessSecret               string
 	JWTRefreshSecret              string
 	AccessTokenExpireHours        int
-	MasterKeyServerCurrentVersion int // Current version of server master key
+	MasterKeyServerCurrentVersion int    // Current version of server master key
+	TurnstileSecretKey            string // Cloudflare Turnstile secret key
+	TurnstileEnabled              bool   // Whether Turnstile verification is enabled
+	TurnstileAllowedHostname      string // Optional: allowed hostname for Turnstile verification
 }
 
 var AppConfig *Config
@@ -34,6 +37,14 @@ func LoadConfig() {
 	jwtAccessSecret := os.Getenv("JWT_ACCESS_SECRET")
 	jwtRefreshSecret := os.Getenv("JWT_REFRESH_SECRET")
 
+	// Turnstile configuration
+	turnstileEnabledStr := getEnv("TURNSTILE_ENABLED", "true")
+	turnstileEnabled, err := strconv.ParseBool(turnstileEnabledStr)
+	if err != nil {
+		log.Fatalf("Invalid TURNSTILE_ENABLED value: %s (must be true or false)", turnstileEnabledStr)
+	}
+	turnstileSecretKey := os.Getenv("TURNSTILE_SECRET_KEY")
+
 	AppConfig = &Config{
 		Port:                          getEnv("PORT", "8080"),
 		DBPath:                        getEnv("DB_PATH", "./data/hrt-tracker.db"),
@@ -41,6 +52,9 @@ func LoadConfig() {
 		JWTRefreshSecret:              jwtRefreshSecret,
 		AccessTokenExpireHours:        accessExpire,
 		MasterKeyServerCurrentVersion: masterKeyVersion,
+		TurnstileSecretKey:            turnstileSecretKey,
+		TurnstileEnabled:              turnstileEnabled,
+		TurnstileAllowedHostname:      os.Getenv("TURNSTILE_ALLOWED_HOSTNAME"),
 	}
 
 	// Validate critical security configuration
@@ -100,6 +114,16 @@ func validateConfig() error {
 		if err != nil {
 			return fmt.Errorf("server master key validation failed: %w", err)
 		}
+	}
+
+	// Validate Turnstile configuration
+	if AppConfig.TurnstileEnabled && AppConfig.TurnstileSecretKey == "" {
+		return fmt.Errorf("TURNSTILE_SECRET_KEY is required when TURNSTILE_ENABLED is true")
+	}
+
+	// Log warning if Turnstile is disabled
+	if !AppConfig.TurnstileEnabled {
+		log.Println("WARNING: Turnstile verification is disabled. This should only be used in development.")
 	}
 
 	return nil

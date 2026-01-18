@@ -26,6 +26,13 @@ func main() {
 	// Setup Gin router
 	router := gin.Default()
 
+	// Configure trusted proxies for accurate client IP detection
+	// In production, set this to your actual proxy IPs (e.g., Cloudflare, nginx)
+	// For development, trust all proxies (not recommended for production)
+	if err := router.SetTrustedProxies(nil); err != nil {
+		log.Fatal("Failed to set trusted proxies:", err)
+	}
+
 	// CORS middleware
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")

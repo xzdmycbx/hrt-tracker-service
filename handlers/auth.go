@@ -16,13 +16,15 @@ import (
 )
 
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username       string `json:"username" binding:"required"`
+	Password       string `json:"password" binding:"required"`
+	TurnstileToken string `json:"turnstile_token"` // Optional when Turnstile is disabled
 }
 
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username       string `json:"username" binding:"required"`
+	Password       string `json:"password" binding:"required"`
+	TurnstileToken string `json:"turnstile_token"` // Optional when Turnstile is disabled
 }
 
 type RefreshTokenRequest struct {
@@ -40,6 +42,19 @@ func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
+
+	// Verify Turnstile token
+	remoteIP := getRealIP(c)
+	// Pass empty action to make it optional (recommended: set data-action="register" on frontend)
+	isInternalError, err := utils.VerifyTurnstileToken(req.TurnstileToken, remoteIP, "")
+	if err != nil {
+		if isInternalError {
+			utils.InternalErrorResponse(c, "Failed to verify captcha")
+		} else {
+			utils.BadRequestResponse(c, "Invalid captcha")
+		}
 		return
 	}
 
@@ -132,6 +147,19 @@ func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
+
+	// Verify Turnstile token
+	remoteIP := getRealIP(c)
+	// Pass empty action to make it optional (recommended: set data-action="login" on frontend)
+	isInternalError, err := utils.VerifyTurnstileToken(req.TurnstileToken, remoteIP, "")
+	if err != nil {
+		if isInternalError {
+			utils.InternalErrorResponse(c, "Failed to verify captcha")
+		} else {
+			utils.BadRequestResponse(c, "Invalid captcha")
+		}
 		return
 	}
 
@@ -307,21 +335,9 @@ func parseDeviceInfo(userAgent string) string {
 	return browser + " on " + os
 }
 
-// Helper: Get real IP from request headers
+// Helper: Get real IP from request
+// Uses Gin's built-in ClientIP() which respects trusted proxies configuration
 func getRealIP(c *gin.Context) string {
-	// Priority: X-Forwarded-For > X-Real-IP > RemoteAddr
-	forwarded := c.GetHeader("X-Forwarded-For")
-	if forwarded != "" {
-		// X-Forwarded-For can contain multiple IPs, take the first one
-		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
-	}
-
-	realIP := c.GetHeader("X-Real-IP")
-	if realIP != "" {
-		return realIP
-	}
-
 	return c.ClientIP()
 }
 
