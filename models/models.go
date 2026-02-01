@@ -117,5 +117,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&RefreshToken{},
 		&Share{},
 		&Authorization{},
+		&SystemStatistics{},
+		&DataSyncCounter{},
 	)
 }

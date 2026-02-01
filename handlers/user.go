@@ -8,6 +8,7 @@ import (
 	"hrt-tracker-service/database"
 	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/models"
+	"hrt-tracker-service/services"
 	"hrt-tracker-service/utils"
 	"io"
 	"regexp"
@@ -278,6 +279,7 @@ func GetUserData(c *gin.Context) {
 	// Get user data
 	var userData models.UserData
 	if err := db.Where("user_id = ?", userID).First(&userData).Error; err != nil {
+		// No data to sync
 		utils.SuccessResponse(c, map[string]interface{}{
 			"data":         nil,
 			"is_encrypted": false,
@@ -329,6 +331,11 @@ func GetUserData(c *gin.Context) {
 			return
 		}
 
+		// Record data sync (successful pull)
+		if statsService := services.GetGlobalStatsService(); statsService != nil {
+			statsService.RecordDataSync()
+		}
+
 		utils.SuccessResponse(c, map[string]interface{}{
 			"data":         data,
 			"is_encrypted": true,
@@ -349,6 +356,11 @@ func GetUserData(c *gin.Context) {
 	if err := json.Unmarshal([]byte(userData.EncryptedData), &data); err != nil {
 		utils.InternalErrorResponse(c, "Failed to parse data")
 		return
+	}
+
+	// Record data sync (successful pull)
+	if statsService := services.GetGlobalStatsService(); statsService != nil {
+		statsService.RecordDataSync()
 	}
 
 	utils.SuccessResponse(c, map[string]interface{}{

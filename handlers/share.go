@@ -8,6 +8,7 @@ import (
 	"hrt-tracker-service/database"
 	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/models"
+	"hrt-tracker-service/services"
 	"hrt-tracker-service/utils"
 	"regexp"
 
@@ -452,6 +453,11 @@ func ViewShare(c *gin.Context) {
 	// Increment view count on successful view
 	share.ViewCount++
 	db.Save(&share)
+
+	// Record data sync (successful share view)
+	if statsService := services.GetGlobalStatsService(); statsService != nil {
+		statsService.RecordDataSync()
+	}
 
 	utils.SuccessResponse(c, map[string]interface{}{
 		"data":       data,

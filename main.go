@@ -5,6 +5,7 @@ import (
 	"hrt-tracker-service/database"
 	"hrt-tracker-service/handlers"
 	"hrt-tracker-service/middleware"
+	"hrt-tracker-service/services"
 	"log"
 	"time"
 
@@ -19,6 +20,11 @@ func main() {
 	if err := database.InitDB(config.AppConfig.DBPath); err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
+
+	// Initialize and start statistics service
+	statsService := services.NewStatisticsService(database.GetDB(), config.AppConfig.DBPath)
+	services.SetGlobalStatsService(statsService)
+	statsService.Start()
 
 	// Start rate limit cleanup goroutine
 	go middleware.CleanupRateLimitStore()
@@ -55,9 +61,14 @@ func main() {
 	router.GET("/health", healthHandler)
 	router.HEAD("/health", healthHandler)
 
+	// Statistics handler
+	statsHandler := handlers.NewStatisticsHandler(database.GetDB())
+
 	// Public routes
 	public := router.Group("/api")
 	{
+		// Public statistics endpoint (no authentication required)
+		public.GET("/statistics", statsHandler.GetSystemStatistics)
 		// Auth endpoints with rate limiting to prevent brute force
 		public.POST("/auth/register",
 			middleware.PublicRateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
