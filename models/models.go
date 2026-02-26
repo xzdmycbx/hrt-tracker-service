@@ -22,9 +22,9 @@ type User struct {
 	MasterKeyVersion       int    `gorm:"default:0" json:"-"` // Server key version (0 = not using wrapping)
 
 	// OIDC/OAuth2 fields (permanent once set — unbinding is not supported)
-	OIDCSubject  string `gorm:"index" json:"-"` // OIDC sub claim (unique identifier at provider)
-	OIDCProvider string `gorm:"" json:"-"`      // Provider base URL
-	OIDCEmail    string `gorm:"" json:"-"`      // Email from OIDC userinfo (for display purposes)
+	OIDCSubject  string `gorm:"column:oidc_subject;index" json:"-"` // OIDC sub claim (unique identifier at provider)
+	OIDCProvider string `gorm:"column:oidc_provider" json:"-"`      // Provider base URL
+	OIDCEmail    string `gorm:"column:oidc_email" json:"-"`          // Email from OIDC userinfo (for display purposes)
 
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
