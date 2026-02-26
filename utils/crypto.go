@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	saltSize   = 16
-	keySize    = 32
-	iterations = 100000 // Increased from 10000 for better security
+	saltSize              = 16
+	keySize               = 32
+	iterations            = 100000 // Increased from 10000 for better security
+	iterationsLegacy      = 10000  // Legacy value used by old accounts
 
 	// Argon2id parameters
 	argon2Memory      = 64 * 1024 // 64 MB
@@ -47,11 +48,32 @@ func HashPassword(password, salt string) string {
 	return base64.StdEncoding.EncodeToString(hash)
 }
 
-// VerifyPassword verifies a password against a hash using constant-time comparison
-func VerifyPassword(password, salt, hash string) bool {
+// VerifyPassword verifies a password against a hash using constant-time comparison.
+// It tries the current iteration count first, then falls back to the legacy count
+// so that accounts created before the iteration upgrade can still log in.
+// Returns (matched bool, needsRehash bool) — needsRehash is true when the legacy
+// count was used, signalling the caller to re-hash and store the upgraded hash.
+func VerifyPassword(password, salt, hash string) (bool, bool) {
 	computedHash := HashPassword(password, salt)
-	// Use constant-time comparison to prevent timing attacks
-	return subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1
+	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1 {
+		return true, false
+	}
+	// Fallback: try legacy iteration count for accounts created before the upgrade
+	legacyHash := hashPasswordWithIterations(password, salt, iterationsLegacy)
+	if subtle.ConstantTimeCompare([]byte(legacyHash), []byte(hash)) == 1 {
+		return true, true // matched with legacy — caller should re-hash
+	}
+	return false, false
+}
+
+// hashPasswordWithIterations is a private helper that hashes with an explicit iteration count.
+func hashPasswordWithIterations(password, salt string, iters int) string {
+	saltBytes, err := base64.StdEncoding.DecodeString(salt)
+	if err != nil {
+		return ""
+	}
+	hash := pbkdf2.Key([]byte(password), saltBytes, iters, keySize, sha256.New)
+	return base64.StdEncoding.EncodeToString(hash)
 }
 
 // HashPasswordArgon2id hashes a password with a salt using Argon2id (for 6-digit security passwords)

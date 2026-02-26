@@ -107,7 +107,8 @@ func RevokeSession(c *gin.Context) {
 	}
 
 	salt, hash := parts[0], parts[1]
-	if !utils.VerifyPassword(req.Password, salt, hash) {
+	matched, _ := utils.VerifyPassword(req.Password, salt, hash)
+	if !matched {
 		utils.UnauthorizedResponse(c, "Invalid password")
 		return
 	}
@@ -153,7 +154,8 @@ func RevokeAllOtherSessions(c *gin.Context) {
 	}
 
 	salt, hash := parts[0], parts[1]
-	if !utils.VerifyPassword(req.Password, salt, hash) {
+	matched, _ := utils.VerifyPassword(req.Password, salt, hash)
+	if !matched {
 		utils.UnauthorizedResponse(c, "Invalid password")
 		return
 	}

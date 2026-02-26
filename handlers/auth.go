@@ -199,9 +199,17 @@ func Login(c *gin.Context) {
 	}
 
 	salt, hash := parts[0], parts[1]
-	if !utils.VerifyPassword(req.Password, salt, hash) {
+	matched, needsRehash := utils.VerifyPassword(req.Password, salt, hash)
+	if !matched {
 		utils.UnauthorizedResponse(c, "Invalid username or password")
 		return
+	}
+	if needsRehash {
+		// Account was hashed with legacy iteration count — upgrade transparently on login
+		if newSalt, err := utils.GenerateSalt(); err == nil {
+			user.Password = newSalt + ":" + utils.HashPassword(req.Password, newSalt)
+			db.Save(&user) // best-effort; login proceeds even if save fails
+		}
 	}
 
 	// Get session information
@@ -425,7 +433,8 @@ func ChangePassword(c *gin.Context) {
 	}
 
 	// Verify old password
-	if !utils.VerifyPassword(req.OldPassword, salt, hash) {
+	matched, _ := utils.VerifyPassword(req.OldPassword, salt, hash)
+	if !matched {
 		utils.UnauthorizedResponse(c, "Authentication failed")
 		return
 	}
@@ -567,7 +576,8 @@ func RemoveLoginPassword(c *gin.Context) {
 		utils.InternalErrorResponse(c, "Invalid password format")
 		return
 	}
-	if !utils.VerifyPassword(req.Password, salt, hash) {
+	matched, _ := utils.VerifyPassword(req.Password, salt, hash)
+	if !matched {
 		utils.UnauthorizedResponse(c, "Incorrect password")
 		return
 	}

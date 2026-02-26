@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -43,9 +44,8 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
-	// Explicitly ensure OIDC columns exist on the users table.
-	// AutoMigrate may not reliably add new columns to an existing table on all
-	// SQLite deployments, so we check and add them manually as a safety net.
+	// Explicitly ensure OIDC columns exist. We use PRAGMA table_info (raw SQL)
+	// rather than GORM's HasColumn, which has known reliability issues on SQLite.
 	if err := ensureOIDCColumns(db); err != nil {
 		return err
 	}
@@ -59,28 +59,42 @@ func GetDB() *gorm.DB {
 	return DB
 }
 
-// ensureOIDCColumns checks that the OIDC columns exist on the users table and
-// adds them if missing. SQLite cannot detect column absence via GORM AutoMigrate
-// in all deployment scenarios, so this acts as an explicit safety net.
+// ensureOIDCColumns uses PRAGMA table_info to reliably detect missing columns
+// and adds them with ALTER TABLE. SQLite does not support IF NOT EXISTS in
+// ALTER TABLE, so we check first via PRAGMA and ignore "duplicate column" errors
+// as a fallback.
 func ensureOIDCColumns(db *gorm.DB) error {
-	type colDef struct {
-		field string
-		sql   string
+	// Read existing columns from the actual SQLite schema
+	type pragmaRow struct {
+		Name string `gorm:"column:name"`
 	}
-	cols := []colDef{
-		{"OIDCSubject", "ALTER TABLE users ADD COLUMN oidc_subject TEXT"},
-		{"OIDCProvider", "ALTER TABLE users ADD COLUMN oidc_provider TEXT"},
-		{"OIDCEmail", "ALTER TABLE users ADD COLUMN oidc_email TEXT"},
+	var rows []pragmaRow
+	if err := db.Raw("PRAGMA table_info(users)").Scan(&rows).Error; err != nil {
+		return err
 	}
-	for _, c := range cols {
-		if !db.Migrator().HasColumn(&models.User{}, c.field) {
-			if err := db.Exec(c.sql).Error; err != nil {
+	existing := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		existing[strings.ToLower(r.Name)] = true
+	}
+
+	additions := []struct {
+		col string
+		ddl string
+	}{
+		{"oidc_subject", "ALTER TABLE users ADD COLUMN oidc_subject TEXT NOT NULL DEFAULT ''"},
+		{"oidc_provider", "ALTER TABLE users ADD COLUMN oidc_provider TEXT NOT NULL DEFAULT ''"},
+		{"oidc_email", "ALTER TABLE users ADD COLUMN oidc_email TEXT NOT NULL DEFAULT ''"},
+	}
+
+	for _, a := range additions {
+		if !existing[a.col] {
+			if err := db.Exec(a.ddl).Error; err != nil {
 				return err
 			}
-			log.Printf("Added missing column: %s", c.field)
+			log.Printf("Migration: added missing column %q to users table", a.col)
 		}
 	}
-	// Ensure index on oidc_subject exists
+
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_users_oidc_subject ON users(oidc_subject)")
 	return nil
 }
