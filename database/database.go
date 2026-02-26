@@ -43,6 +43,13 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
+	// Explicitly ensure OIDC columns exist on the users table.
+	// AutoMigrate may not reliably add new columns to an existing table on all
+	// SQLite deployments, so we check and add them manually as a safety net.
+	if err := ensureOIDCColumns(db); err != nil {
+		return err
+	}
+
 	log.Println("Database initialized successfully")
 	return nil
 }
@@ -50,4 +57,30 @@ func InitDB(dbPath string) error {
 // GetDB returns the database instance
 func GetDB() *gorm.DB {
 	return DB
+}
+
+// ensureOIDCColumns checks that the OIDC columns exist on the users table and
+// adds them if missing. SQLite cannot detect column absence via GORM AutoMigrate
+// in all deployment scenarios, so this acts as an explicit safety net.
+func ensureOIDCColumns(db *gorm.DB) error {
+	type colDef struct {
+		field string
+		sql   string
+	}
+	cols := []colDef{
+		{"OIDCSubject", "ALTER TABLE users ADD COLUMN oidc_subject TEXT"},
+		{"OIDCProvider", "ALTER TABLE users ADD COLUMN oidc_provider TEXT"},
+		{"OIDCEmail", "ALTER TABLE users ADD COLUMN oidc_email TEXT"},
+	}
+	for _, c := range cols {
+		if !db.Migrator().HasColumn(&models.User{}, c.field) {
+			if err := db.Exec(c.sql).Error; err != nil {
+				return err
+			}
+			log.Printf("Added missing column: %s", c.field)
+		}
+	}
+	// Ensure index on oidc_subject exists
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_users_oidc_subject ON users(oidc_subject)")
+	return nil
 }
