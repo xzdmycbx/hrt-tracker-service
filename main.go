@@ -7,6 +7,7 @@ import (
 	"hrt-tracker-service/middleware"
 	"hrt-tracker-service/services"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,7 +31,10 @@ func main() {
 	go middleware.CleanupRateLimitStore()
 
 	// Setup Gin router
-	router := gin.Default()
+	// Use gin.New() (no built-in middleware) so we can register CORS first.
+	// CORS MUST be the first middleware: if it comes after Recovery, a panic
+	// response would be written by Recovery before CORS sets its headers.
+	router := gin.New()
 
 	// Configure trusted proxies for accurate client IP detection
 	// In production, set this to your actual proxy IPs (e.g., Cloudflare, nginx)
@@ -39,11 +43,21 @@ func main() {
 		log.Fatal("Failed to set trusted proxies:", err)
 	}
 
-	// CORS middleware
+	// ── 1. CORS (first — always runs, even on panics) ─────────────────────────
+	allowedOrigins := buildAllowedOriginsSet(config.AppConfig.CORSAllowedOrigins)
 	router.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
+		origin := c.Request.Header.Get("Origin")
+
+		if allowedOrigins["*"] {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && allowedOrigins[origin] {
+			// Echo the specific allowed origin and tell caches it varies by Origin
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Vary", "Origin")
+		}
+
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
@@ -53,6 +67,10 @@ func main() {
 
 		c.Next()
 	})
+
+	// ── 2. Logger & Recovery (after CORS so error responses also carry CORS headers)
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
 
 	// Health check endpoint (支持 GET 和 HEAD 请求，用于 Docker healthcheck)
 	healthHandler := func(c *gin.Context) {
@@ -183,4 +201,20 @@ func main() {
 	if err := router.Run(":" + config.AppConfig.Port); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
+}
+
+// buildAllowedOriginsSet parses CORS_ALLOWED_ORIGINS into a fast-lookup set.
+// Supports "*" (wildcard) or comma-separated origin URLs.
+func buildAllowedOriginsSet(raw string) map[string]bool {
+	set := map[string]bool{}
+	for _, o := range strings.Split(raw, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			set[o] = true
+		}
+	}
+	if len(set) == 0 {
+		set["*"] = true // safe default
+	}
+	return set
 }

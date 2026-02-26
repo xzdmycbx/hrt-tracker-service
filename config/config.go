@@ -30,6 +30,9 @@ type Config struct {
 	OIDCRedirectURI      string // Frontend redirect URI after OIDC auth (the frontend callback page URL)
 	OIDCScopes           string // Space-separated scopes (default: "openid profile email")
 	OIDCAutoRegister     bool   // Auto-register new users who log in via OIDC
+
+	// CORS
+	CORSAllowedOrigins string // Comma-separated allowed origins, or "*" for all (default: "*")
 }
 
 var AppConfig *Config
@@ -87,6 +90,7 @@ func LoadConfig() {
 		OIDCRedirectURI:               os.Getenv("OIDC_REDIRECT_URI"),
 		OIDCScopes:                    getEnv("OIDC_SCOPES", "openid profile email"),
 		OIDCAutoRegister:              oidcAutoRegister,
+		CORSAllowedOrigins:            getEnv("CORS_ALLOWED_ORIGINS", "*"),
 	}
 
 	// Validate critical security configuration
