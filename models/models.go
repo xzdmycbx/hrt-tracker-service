@@ -10,7 +10,7 @@ import (
 type User struct {
 	ID                   uint      `gorm:"primaryKey" json:"id"`
 	Username             string    `gorm:"uniqueIndex;not null" json:"username"`
-	Password             string    `gorm:"not null" json:"-"`
+	Password             string    `gorm:"" json:"-"` // Empty string means OIDC-only account
 	SecurityPasswordHash string    `gorm:"" json:"-"`
 	SecurityPasswordSalt string    `gorm:"" json:"-"`
 	Avatar               string    `gorm:"" json:"avatar"` // Avatar file path (relative to avatars directory)
@@ -20,6 +20,11 @@ type User struct {
 	MasterKeyServerWrapped string `gorm:"type:text" json:"-"` // Ku wrapped with server key
 	MasterKeySalt          string `gorm:"" json:"-"`          // Salt for user key derivation
 	MasterKeyVersion       int    `gorm:"default:0" json:"-"` // Server key version (0 = not using wrapping)
+
+	// OIDC/OAuth2 fields (permanent once set — unbinding is not supported)
+	OIDCSubject  string `gorm:"index" json:"-"` // OIDC sub claim (unique identifier at provider)
+	OIDCProvider string `gorm:"" json:"-"`      // Provider base URL
+	OIDCEmail    string `gorm:"" json:"-"`      // Email from OIDC userinfo (for display purposes)
 
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`

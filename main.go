@@ -80,6 +80,17 @@ func main() {
 			middleware.PublicRateLimitMiddleware(50, 5*time.Minute, 15*time.Minute),
 			handlers.RefreshToken)
 
+		// OIDC / OAuth2 endpoints (public — user not yet authenticated)
+		public.GET("/auth/oidc/config",
+			middleware.PublicRateLimitMiddleware(150, 1*time.Minute, 5*time.Minute),
+			handlers.OIDCGetConfig)
+		public.GET("/auth/oidc/authorize",
+			middleware.PublicRateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
+			handlers.OIDCGetAuthorizeURL)
+		public.POST("/auth/oidc/callback",
+			middleware.PublicRateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
+			handlers.OIDCCallback)
+
 		// Public share viewing with rate limiting to prevent password brute force
 		public.POST("/shares/:share_id/view",
 			middleware.PublicRateLimitMiddleware(50, 5*time.Minute, 15*time.Minute),
@@ -100,10 +111,29 @@ func main() {
 		protected.PUT("/user/security-password", handlers.UpdateSecurityPassword)
 		protected.GET("/user/security-password/status", handlers.GetSecurityPasswordStatus)
 
-		// Password management
+		// Login password management
 		protected.PUT("/user/password",
 			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
 			handlers.ChangePassword)
+		// Set initial login password (for OIDC-only accounts)
+		protected.POST("/user/password",
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
+			handlers.SetLoginPassword)
+		// Remove login password (requires OIDC to be bound)
+		protected.DELETE("/user/password",
+			middleware.RateLimitMiddleware(10, 5*time.Minute, 15*time.Minute),
+			handlers.RemoveLoginPassword)
+
+		// OIDC management (authenticated user)
+		protected.GET("/auth/oidc/bind/authorize",
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
+			handlers.OIDCGetBindAuthorizeURL)
+		protected.POST("/auth/oidc/bind/callback",
+			middleware.RateLimitMiddleware(25, 5*time.Minute, 15*time.Minute),
+			handlers.OIDCBindCallback)
+		protected.GET("/auth/oidc/bind/status",
+			middleware.RateLimitMiddleware(150, 1*time.Minute, 5*time.Minute),
+			handlers.OIDCBindStatus)
 
 		// Avatar management with rate limiting
 		protected.POST("/user/avatar",

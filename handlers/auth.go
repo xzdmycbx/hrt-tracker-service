@@ -32,13 +32,20 @@ type RefreshTokenRequest struct {
 }
 
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
+	AccessToken      string `json:"access_token"`
+	RefreshToken     string `json:"refresh_token"`
+	ExpiresIn        int    `json:"expires_in"`
+	RequiresOIDCBind bool   `json:"requires_oidc_bind,omitempty"` // true when REGISTRATION_DISABLED and OIDC not yet bound
 }
 
 // Register handles user registration
 func Register(c *gin.Context) {
+	// Check if registration is disabled
+	if config.AppConfig.RegistrationDisabled {
+		utils.ForbiddenResponse(c, "Registration is disabled on this server")
+		return
+	}
+
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequestResponse(c, "Invalid request body")
@@ -172,6 +179,18 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// Check if this is an OIDC-only account (no password)
+	if user.Password == "" {
+		utils.BadRequestResponse(c, "This account uses OIDC authentication. Please log in with OIDC.")
+		return
+	}
+
+	// Accounts with OIDC bound must use OIDC login exclusively
+	if user.OIDCSubject != "" {
+		utils.BadRequestResponse(c, "This account has OIDC linked. Please log in with OIDC.")
+		return
+	}
+
 	// Verify password
 	parts := regexp.MustCompile(":").Split(user.Password, 2)
 	if len(parts) != 2 {
@@ -215,9 +234,10 @@ func Login(c *gin.Context) {
 	db.Create(&refreshTokenModel)
 
 	utils.SuccessResponse(c, TokenResponse{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    config.AppConfig.AccessTokenExpireHours * 3600,
+		AccessToken:      accessToken,
+		RefreshToken:     refreshToken,
+		ExpiresIn:        config.AppConfig.AccessTokenExpireHours * 3600,
+		RequiresOIDCBind: config.AppConfig.RegistrationDisabled, // registration disabled → must bind OIDC
 	})
 }
 
@@ -385,6 +405,18 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// OIDC-only accounts have no login password
+	if user.Password == "" {
+		utils.BadRequestResponse(c, "No login password set. Use POST /user/password to set an initial password.")
+		return
+	}
+
+	// OIDC-bound accounts must use OIDC login — managing a login password is not permitted
+	if user.OIDCSubject != "" {
+		utils.ForbiddenResponse(c, "This account has OIDC linked and cannot use password login. Password management is disabled.")
+		return
+	}
+
 	// Extract salt and hash from user password
 	salt, hash, err := extractSaltAndHash(user.Password)
 	if err != nil {
@@ -438,4 +470,116 @@ func extractSaltAndHash(password string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid password format")
 	}
 	return parts[0], parts[1], nil
+}
+
+// SetLoginPasswordRequest is used by OIDC-only users to set an initial login password
+type SetLoginPasswordRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+// SetLoginPassword allows OIDC-only accounts to set a login password
+func SetLoginPassword(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	var req SetLoginPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
+
+	db := database.GetDB()
+	var user models.User
+	if err := db.First(&user, userID).Error; err != nil {
+		utils.NotFoundResponse(c, "User not found")
+		return
+	}
+
+	if user.Password != "" {
+		utils.BadRequestResponse(c, "Login password already set. Use PUT /user/password to change it.")
+		return
+	}
+
+	// OIDC-bound accounts must use OIDC login — setting a password is not permitted
+	if user.OIDCSubject != "" {
+		utils.ForbiddenResponse(c, "This account has OIDC linked. Password login is disabled for OIDC accounts.")
+		return
+	}
+
+	if len(req.Password) < 8 {
+		utils.BadRequestResponse(c, "Password must be at least 8 characters long")
+		return
+	}
+	hasLetter := regexp.MustCompile(`[a-zA-Z]`).MatchString(req.Password)
+	hasNumber := regexp.MustCompile(`[0-9]`).MatchString(req.Password)
+	if !hasLetter || !hasNumber {
+		utils.BadRequestResponse(c, "Password must contain both letters and numbers")
+		return
+	}
+
+	salt, err := utils.GenerateSalt()
+	if err != nil {
+		utils.InternalErrorResponse(c, "Failed to generate salt")
+		return
+	}
+	user.Password = salt + ":" + utils.HashPassword(req.Password, salt)
+	if err := db.Save(&user).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to set password")
+		return
+	}
+
+	utils.SuccessMessageResponse(c, "Login password set successfully", nil)
+}
+
+// RemoveLoginPasswordRequest confirms the deletion of a login password
+type RemoveLoginPasswordRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+// RemoveLoginPassword removes the login password from an account that has OIDC bound
+func RemoveLoginPassword(c *gin.Context) {
+	userID := middleware.GetUserID(c)
+	var req RemoveLoginPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequestResponse(c, "Invalid request body")
+		return
+	}
+
+	db := database.GetDB()
+	var user models.User
+	if err := db.First(&user, userID).Error; err != nil {
+		utils.NotFoundResponse(c, "User not found")
+		return
+	}
+
+	if user.Password == "" {
+		utils.BadRequestResponse(c, "No login password to remove")
+		return
+	}
+
+	// Require OIDC binding before removing password (prevents lockout)
+	if user.OIDCSubject == "" {
+		utils.BadRequestResponse(c, "Cannot remove login password without an OIDC identity linked. Please link an OIDC account first.")
+		return
+	}
+
+	// Verify current password
+	salt, hash, err := extractSaltAndHash(user.Password)
+	if err != nil {
+		utils.InternalErrorResponse(c, "Invalid password format")
+		return
+	}
+	if !utils.VerifyPassword(req.Password, salt, hash) {
+		utils.UnauthorizedResponse(c, "Incorrect password")
+		return
+	}
+
+	user.Password = ""
+	if err := db.Save(&user).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to remove password")
+		return
+	}
+
+	// Revoke all current sessions — user must re-login via OIDC
+	db.Where("user_id = ?", userID).Delete(&models.RefreshToken{})
+
+	utils.SuccessMessageResponse(c, "Login password removed successfully. Please log in with OIDC.", nil)
 }

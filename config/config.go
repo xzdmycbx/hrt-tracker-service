@@ -20,6 +20,16 @@ type Config struct {
 	TurnstileSecretKey            string // Cloudflare Turnstile secret key
 	TurnstileEnabled              bool   // Whether Turnstile verification is enabled
 	TurnstileAllowedHostname      string // Optional: allowed hostname for Turnstile verification
+
+	// Registration & OIDC
+	RegistrationDisabled bool   // Disable local username/password registration
+	OIDCEnabled          bool   // Enable OIDC/OAuth2 login
+	OIDCProviderURL      string // OIDC provider base URL (discovery at /.well-known/openid-configuration)
+	OIDCClientID         string // OAuth2 client ID
+	OIDCClientSecret     string // OAuth2 client secret
+	OIDCRedirectURI      string // Frontend redirect URI after OIDC auth (the frontend callback page URL)
+	OIDCScopes           string // Space-separated scopes (default: "openid profile email")
+	OIDCAutoRegister     bool   // Auto-register new users who log in via OIDC
 }
 
 var AppConfig *Config
@@ -45,6 +55,20 @@ func LoadConfig() {
 	}
 	turnstileSecretKey := os.Getenv("TURNSTILE_SECRET_KEY")
 
+	// OIDC / Registration configuration
+	parseBoolEnv := func(key, defaultVal string) bool {
+		raw := getEnv(key, defaultVal)
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			log.Printf("WARNING: Invalid boolean value for %s=%q — using default (%s)", key, raw, defaultVal)
+			v, _ = strconv.ParseBool(defaultVal)
+		}
+		return v
+	}
+	oidcEnabled := parseBoolEnv("OIDC_ENABLED", "false")
+	oidcAutoRegister := parseBoolEnv("OIDC_AUTO_REGISTER", "true")
+	registrationDisabled := parseBoolEnv("REGISTRATION_DISABLED", "false")
+
 	AppConfig = &Config{
 		Port:                          getEnv("PORT", "8080"),
 		DBPath:                        getEnv("DB_PATH", "./data/hrt-tracker.db"),
@@ -55,6 +79,14 @@ func LoadConfig() {
 		TurnstileSecretKey:            turnstileSecretKey,
 		TurnstileEnabled:              turnstileEnabled,
 		TurnstileAllowedHostname:      os.Getenv("TURNSTILE_ALLOWED_HOSTNAME"),
+		RegistrationDisabled:          registrationDisabled,
+		OIDCEnabled:                   oidcEnabled,
+		OIDCProviderURL:               os.Getenv("OIDC_PROVIDER_URL"),
+		OIDCClientID:                  os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:              os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURI:               os.Getenv("OIDC_REDIRECT_URI"),
+		OIDCScopes:                    getEnv("OIDC_SCOPES", "openid profile email"),
+		OIDCAutoRegister:              oidcAutoRegister,
 	}
 
 	// Validate critical security configuration
@@ -124,6 +156,26 @@ func validateConfig() error {
 	// Log warning if Turnstile is disabled
 	if !AppConfig.TurnstileEnabled {
 		log.Println("WARNING: Turnstile verification is disabled. This should only be used in development.")
+	}
+
+	// Validate OIDC configuration
+	if AppConfig.OIDCEnabled {
+		if AppConfig.OIDCProviderURL == "" {
+			return fmt.Errorf("OIDC_PROVIDER_URL is required when OIDC_ENABLED is true")
+		}
+		if AppConfig.OIDCClientID == "" {
+			return fmt.Errorf("OIDC_CLIENT_ID is required when OIDC_ENABLED is true")
+		}
+		if AppConfig.OIDCClientSecret == "" {
+			return fmt.Errorf("OIDC_CLIENT_SECRET is required when OIDC_ENABLED is true")
+		}
+		if AppConfig.OIDCRedirectURI == "" {
+			return fmt.Errorf("OIDC_REDIRECT_URI is required when OIDC_ENABLED is true")
+		}
+	}
+
+	if AppConfig.RegistrationDisabled {
+		log.Println("INFO: Local registration is disabled. Users must log in via OIDC.")
 	}
 
 	return nil
