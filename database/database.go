@@ -50,12 +50,17 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
-	// Step 2: Remove duplicate OIDC users, keeping the earliest account.
+	// Step 2: Normalize NULL/whitespace-only fields from legacy rows.
+	if err := normalizeLegacyAuthFields(db); err != nil {
+		return err
+	}
+
+	// Step 3: Remove duplicate OIDC users, keeping the earliest account.
 	if err := cleanupDuplicateOIDCUsers(db); err != nil {
 		return err
 	}
 
-	// Step 3: Add a partial unique index to prevent future duplicates.
+	// Step 4: Add a partial unique index to prevent future duplicates.
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_identity ON users(oidc_subject, oidc_provider) WHERE oidc_subject != '' AND oidc_provider != ''")
 
 	log.Println("Database initialized successfully")
@@ -79,6 +84,25 @@ func pragmaColumns(db *gorm.DB, table string) map[string]bool {
 		cols[strings.ToLower(r.Name)] = true
 	}
 	return cols
+}
+
+// normalizeLegacyAuthFields ensures NULL and whitespace-only auth fields are
+// replaced with empty strings. This prevents unexpected behaviour when the
+// Go code does equality comparisons against "".
+func normalizeLegacyAuthFields(db *gorm.DB) error {
+	statements := []string{
+		"UPDATE users SET password = '' WHERE password IS NULL",
+		"UPDATE users SET oidc_subject = '' WHERE oidc_subject IS NULL",
+		"UPDATE users SET oidc_provider = '' WHERE oidc_provider IS NULL",
+		"UPDATE users SET oidc_email = '' WHERE oidc_email IS NULL",
+		"UPDATE users SET oidc_subject = TRIM(oidc_subject), oidc_provider = TRIM(oidc_provider), oidc_email = TRIM(oidc_email)",
+	}
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateOIDCColumnNames ensures the canonical column names (oidc_subject,

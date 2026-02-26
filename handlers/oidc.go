@@ -217,14 +217,16 @@ func fetchOIDCUserInfo(userinfoEndpoint, accessToken string) (*oidcUserInfo, err
 
 // ─── Username Generation ──────────────────────────────────────────────────────
 
-var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
+// usernameRegex allows full email addresses (including @ and .) as usernames,
+// up to 100 characters. This supports OIDC auto-registration using the full email.
+var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.@+\-]{3,100}$`)
 var sanitizeRegex = regexp.MustCompile(`[^a-zA-Z0-9_]`)
 
 func generateUsernameFromOIDC(info *oidcUserInfo) string {
 	sanitize := func(s string) string {
 		s = sanitizeRegex.ReplaceAllString(s, "_")
-		if len(s) > 16 {
-			s = s[:16]
+		if len(s) > 20 {
+			s = s[:20]
 		}
 		for len(s) < 3 {
 			s = s + "_"
@@ -233,18 +235,26 @@ func generateUsernameFromOIDC(info *oidcUserInfo) string {
 	}
 
 	var candidates []string
-	if info.PreferredUsername != "" {
-		candidates = append(candidates, sanitize(info.PreferredUsername))
+	// 1. Full email address — primary source, most stable identifier
+	if info.Email != "" {
+		candidates = append(candidates, info.Email) // e.g., alice@example.com
 	}
+	// 2. Email local part as fallback (if full email is taken)
 	if info.Email != "" {
 		parts := strings.SplitN(info.Email, "@", 2)
 		if len(parts[0]) > 0 {
 			candidates = append(candidates, sanitize(parts[0]))
 		}
 	}
+	// 3. preferred_username as fallback
+	if info.PreferredUsername != "" {
+		candidates = append(candidates, sanitize(info.PreferredUsername))
+	}
+	// 4. Display name as fallback
 	if info.Name != "" {
 		candidates = append(candidates, sanitize(strings.ReplaceAll(info.Name, " ", "_")))
 	}
+	// 5. Subject-based last resort
 	if info.Sub != "" {
 		sub := info.Sub
 		if len(sub) > 12 {
@@ -265,8 +275,8 @@ func generateUsernameFromOIDC(info *oidcUserInfo) string {
 			return base
 		}
 		for i := 1; i <= 999; i++ {
-			candidate := fmt.Sprintf("%s%d", base, i)
-			if len(candidate) > 20 {
+			candidate := fmt.Sprintf("%s_%d", base, i)
+			if len(candidate) > 100 {
 				break
 			}
 			db.Model(&models.User{}).Where("username = ?", candidate).Count(&count)
@@ -402,61 +412,93 @@ func OIDCCallback(c *gin.Context) {
 	db := database.GetDB()
 	providerID := config.AppConfig.OIDCProviderURL
 
-	// Find user by OIDC subject
-	var user models.User
-	err = db.Where("oidc_subject = ? AND oidc_provider = ?", userInfo.Sub, providerID).First(&user).Error
-	if err == nil {
-		// Existing user — issue tokens
-		tokens, err := createSessionAndTokens(c, user.ID)
-		if err != nil {
-			utils.InternalErrorResponse(c, "Failed to generate tokens")
-			return
+	var resultUser models.User
+	isNewUser := false
+	var newUsername string
+
+	txErr := db.Transaction(func(tx *gorm.DB) error {
+		// Find existing user by OIDC subject (inside transaction to prevent race)
+		var existing models.User
+		if err := tx.Where("oidc_subject = ? AND oidc_provider = ?", userInfo.Sub, providerID).First(&existing).Error; err == nil {
+			resultUser = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("database error during user lookup: %w", err)
 		}
-		utils.SuccessResponse(c, map[string]interface{}{
-			"tokens":      tokens,
-			"is_new_user": false,
-		})
-		return
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		utils.InternalErrorResponse(c, "Database error during user lookup")
+
+		// User not found — check if auto-register is allowed
+		if !config.AppConfig.OIDCAutoRegister {
+			return errors.New("auto_register_disabled")
+		}
+
+		// Generate candidate username (email local part first)
+		baseUsername := generateUsernameFromOIDC(userInfo)
+		newUser := models.User{
+			Username:     baseUsername,
+			Password:     "", // OIDC-only account
+			OIDCSubject:  userInfo.Sub,
+			OIDCProvider: providerID,
+			OIDCEmail:    userInfo.Email,
+		}
+
+		// Attempt INSERT with retry on username uniqueness conflict
+		created := false
+		for attempt := 0; attempt <= 99; attempt++ {
+			if attempt > 0 {
+				candidate := fmt.Sprintf("%s_%d", baseUsername, attempt)
+				if len(candidate) > 100 {
+					break
+				}
+				newUser.Username = candidate
+			}
+			if err := tx.Create(&newUser).Error; err != nil {
+				if errors.Is(err, gorm.ErrDuplicatedKey) {
+					newUser.ID = 0 // reset so GORM doesn't treat it as an UPDATE
+					continue
+				}
+				return fmt.Errorf("failed to create user account: %w", err)
+			}
+			created = true
+			break
+		}
+		if !created {
+			return fmt.Errorf("could not find a unique username after retries")
+		}
+
+		// Create UserData in the same transaction (prevents half-initialized accounts)
+		if err := tx.Create(&models.UserData{UserID: newUser.ID, IsEncrypted: false}).Error; err != nil {
+			return fmt.Errorf("failed to initialize user data: %w", err)
+		}
+
+		resultUser = newUser
+		newUsername = newUser.Username
+		isNewUser = true
+		return nil
+	})
+
+	if txErr != nil {
+		if txErr.Error() == "auto_register_disabled" {
+			utils.ForbiddenResponse(c, "No account is linked to this OIDC identity. Please contact the administrator.")
+		} else {
+			utils.InternalErrorResponse(c, "Failed to complete OIDC login")
+		}
 		return
 	}
 
-	// User not found
-	if !config.AppConfig.OIDCAutoRegister {
-		utils.ForbiddenResponse(c, "No account is linked to this OIDC identity. Please contact the administrator.")
-		return
-	}
-
-	// Auto-register
-	username := generateUsernameFromOIDC(userInfo)
-	newUser := models.User{
-		Username:     username,
-		Password:     "", // OIDC-only account
-		OIDCSubject:  userInfo.Sub,
-		OIDCProvider: providerID,
-		OIDCEmail:    userInfo.Email,
-	}
-	if err := db.Create(&newUser).Error; err != nil {
-		utils.InternalErrorResponse(c, "Failed to create user account")
-		return
-	}
-	if err := db.Create(&models.UserData{UserID: newUser.ID, IsEncrypted: false}).Error; err != nil {
-		utils.InternalErrorResponse(c, "Failed to initialize user data")
-		return
-	}
-
-	tokens, err := createSessionAndTokens(c, newUser.ID)
+	tokens, err := createSessionAndTokens(c, resultUser.ID)
 	if err != nil {
 		utils.InternalErrorResponse(c, "Failed to generate tokens")
 		return
 	}
-	utils.SuccessResponse(c, map[string]interface{}{
+
+	resp := map[string]interface{}{
 		"tokens":      tokens,
-		"is_new_user": true,
-		"username":    username,
-	})
+		"is_new_user": isNewUser,
+	}
+	if isNewUser {
+		resp["username"] = newUsername
+	}
+	utils.SuccessResponse(c, resp)
 }
 
 // OIDCGetBindAuthorizeURL returns the authorization URL for binding OIDC to an existing account

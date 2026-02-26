@@ -54,13 +54,16 @@ func HashPassword(password, salt string) string {
 // Returns (matched bool, needsRehash bool) — needsRehash is true when the legacy
 // count was used, signalling the caller to re-hash and store the upgraded hash.
 func VerifyPassword(password, salt, hash string) (bool, bool) {
+	if salt == "" || hash == "" {
+		return false, false
+	}
 	computedHash := HashPassword(password, salt)
-	if subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1 {
+	if computedHash != "" && subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1 {
 		return true, false
 	}
 	// Fallback: try legacy iteration count for accounts created before the upgrade
 	legacyHash := hashPasswordWithIterations(password, salt, iterationsLegacy)
-	if subtle.ConstantTimeCompare([]byte(legacyHash), []byte(hash)) == 1 {
+	if legacyHash != "" && subtle.ConstantTimeCompare([]byte(legacyHash), []byte(hash)) == 1 {
 		return true, true // matched with legacy — caller should re-hash
 	}
 	return false, false

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"hrt-tracker-service/config"
 	"hrt-tracker-service/database"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type RegisterRequest struct {
@@ -175,24 +177,35 @@ func Login(c *gin.Context) {
 	// Find user
 	var user models.User
 	if err := db.Where("username = ?", req.Username).First(&user).Error; err != nil {
-		utils.UnauthorizedResponse(c, "Invalid username or password")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			utils.UnauthorizedResponse(c, "Invalid username or password")
+		} else {
+			utils.InternalErrorResponse(c, "Database error during login")
+		}
 		return
 	}
 
+	password := strings.TrimSpace(user.Password)
+	isOIDCBound := strings.TrimSpace(user.OIDCSubject) != "" && strings.TrimSpace(user.OIDCProvider) != ""
+
 	// Check if this is an OIDC-only account (no password)
-	if user.Password == "" {
-		utils.BadRequestResponse(c, "This account uses OIDC authentication. Please log in with OIDC.")
+	if password == "" {
+		if isOIDCBound {
+			utils.BadRequestResponse(c, "This account uses OIDC authentication. Please log in with OIDC.")
+		} else {
+			utils.InternalErrorResponse(c, "Account password is missing. Please contact support.")
+		}
 		return
 	}
 
 	// Accounts with OIDC bound must use OIDC login exclusively
-	if user.OIDCSubject != "" {
+	if isOIDCBound {
 		utils.BadRequestResponse(c, "This account has OIDC linked. Please log in with OIDC.")
 		return
 	}
 
 	// Verify password
-	parts := regexp.MustCompile(":").Split(user.Password, 2)
+	parts := strings.SplitN(password, ":", 2)
 	if len(parts) != 2 {
 		utils.InternalErrorResponse(c, "Invalid password format")
 		return
@@ -419,12 +432,6 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
-	// OIDC-bound accounts must use OIDC login — managing a login password is not permitted
-	if user.OIDCSubject != "" {
-		utils.ForbiddenResponse(c, "This account has OIDC linked and cannot use password login. Password management is disabled.")
-		return
-	}
-
 	// Extract salt and hash from user password
 	salt, hash, err := extractSaltAndHash(user.Password)
 	if err != nil {
@@ -504,12 +511,6 @@ func SetLoginPassword(c *gin.Context) {
 
 	if user.Password != "" {
 		utils.BadRequestResponse(c, "Login password already set. Use PUT /user/password to change it.")
-		return
-	}
-
-	// OIDC-bound accounts must use OIDC login — setting a password is not permitted
-	if user.OIDCSubject != "" {
-		utils.ForbiddenResponse(c, "This account has OIDC linked. Password login is disabled for OIDC accounts.")
 		return
 	}
 
