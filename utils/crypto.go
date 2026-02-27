@@ -7,19 +7,21 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
-	saltSize              = 16
-	keySize               = 32
-	iterations            = 100000 // Increased from 10000 for better security
-	iterationsLegacy      = 10000  // Legacy value used by old accounts
+	saltSize         = 16
+	keySize          = 32
+	iterations       = 100000 // Increased from 10000 for better security
+	iterationsLegacy = 10000  // Legacy value used by old accounts
 
 	// Argon2id parameters
 	argon2Memory      = 64 * 1024 // 64 MB
@@ -48,35 +50,145 @@ func HashPassword(password, salt string) string {
 	return base64.StdEncoding.EncodeToString(hash)
 }
 
-// VerifyPassword verifies a password against a hash using constant-time comparison.
-// It tries the current iteration count first, then falls back to the legacy count
-// so that accounts created before the iteration upgrade can still log in.
-// Returns (matched bool, needsRehash bool) — needsRehash is true when the legacy
-// count was used, signalling the caller to re-hash and store the upgraded hash.
+// VerifyPassword verifies a password hash with backward compatibility.
+// Returns (matched bool, needsRehash bool).
 func VerifyPassword(password, salt, hash string) (bool, bool) {
+	salt = strings.TrimSpace(salt)
+	hash = strings.TrimSpace(hash)
 	if salt == "" || hash == "" {
 		return false, false
 	}
-	computedHash := HashPassword(password, salt)
-	if computedHash != "" && subtle.ConstantTimeCompare([]byte(computedHash), []byte(hash)) == 1 {
+
+	saltBytes, ok := decodeLegacySalt(salt)
+	if !ok {
+		return false, false
+	}
+
+	// Canonical format: PBKDF2-SHA256 (100000 iters, 32-byte key), base64-std.
+	currentKey := pbkdf2.Key([]byte(password), saltBytes, iterations, keySize, sha256.New)
+	currentHash := base64.StdEncoding.EncodeToString(currentKey)
+	if subtle.ConstantTimeCompare([]byte(currentHash), []byte(hash)) == 1 {
 		return true, false
 	}
-	// Fallback: try legacy iteration count for accounts created before the upgrade
-	legacyHash := hashPasswordWithIterations(password, salt, iterationsLegacy)
-	if legacyHash != "" && subtle.ConstantTimeCompare([]byte(legacyHash), []byte(hash)) == 1 {
-		return true, true // matched with legacy — caller should re-hash
+
+	// Non-canonical encodings under current params are accepted but normalized on next login.
+	if verifyPasswordWithParams(password, saltBytes, hash, iterations, keySize) {
+		return true, true
 	}
+
+	// Legacy compatibility for old iteration count and historical hash length differences.
+	keyLens := []int{keySize}
+	if decodedHash, ok := decodeLegacyHash(hash); ok {
+		if l := len(decodedHash); l > 0 && l != keySize {
+			keyLens = append(keyLens, l)
+		}
+	}
+	for _, keyLen := range keyLens {
+		if verifyPasswordWithParams(password, saltBytes, hash, iterationsLegacy, keyLen) {
+			return true, true
+		}
+	}
+
 	return false, false
 }
 
-// hashPasswordWithIterations is a private helper that hashes with an explicit iteration count.
-func hashPasswordWithIterations(password, salt string, iters int) string {
-	saltBytes, err := base64.StdEncoding.DecodeString(salt)
-	if err != nil {
-		return ""
+// verifyPasswordWithParams verifies PBKDF2-derived keys against legacy hash encodings.
+func verifyPasswordWithParams(password string, saltBytes []byte, storedHash string, iters int, keyLen int) bool {
+	if keyLen <= 0 {
+		return false
 	}
-	hash := pbkdf2.Key([]byte(password), saltBytes, iters, keySize, sha256.New)
-	return base64.StdEncoding.EncodeToString(hash)
+
+	key := pbkdf2.Key([]byte(password), saltBytes, iters, keyLen, sha256.New)
+
+	if subtle.ConstantTimeCompare([]byte(base64.StdEncoding.EncodeToString(key)), []byte(storedHash)) == 1 {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(base64.RawStdEncoding.EncodeToString(key)), []byte(storedHash)) == 1 {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(base64.URLEncoding.EncodeToString(key)), []byte(storedHash)) == 1 {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(base64.RawURLEncoding.EncodeToString(key)), []byte(storedHash)) == 1 {
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(key)), []byte(strings.ToLower(storedHash))) == 1 {
+		return true
+	}
+
+	if storedBytes, ok := decodeLegacyHash(storedHash); ok && len(storedBytes) == len(key) {
+		if subtle.ConstantTimeCompare(storedBytes, key) == 1 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// decodeLegacySalt accepts base64 (std/raw) or hex salts from older deployments.
+func decodeLegacySalt(s string) ([]byte, bool) {
+	if isLikelyHex(s) {
+		if b, err := hex.DecodeString(strings.ToLower(s)); err == nil && len(b) > 0 {
+			return b, true
+		}
+	}
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.RawStdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.URLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := hex.DecodeString(strings.ToLower(s)); err == nil && len(b) > 0 {
+		return b, true
+	}
+	return nil, false
+}
+
+// decodeLegacyHash accepts base64 (std/raw) or hex hash encodings.
+func decodeLegacyHash(s string) ([]byte, bool) {
+	if isLikelyHex(s) {
+		if b, err := hex.DecodeString(strings.ToLower(s)); err == nil && len(b) > 0 {
+			return b, true
+		}
+	}
+	if b, err := base64.StdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.RawStdEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.URLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil && len(b) > 0 {
+		return b, true
+	}
+	if b, err := hex.DecodeString(strings.ToLower(s)); err == nil && len(b) > 0 {
+		return b, true
+	}
+	return nil, false
+}
+
+func isLikelyHex(s string) bool {
+	if len(s) < 2 || len(s)%2 != 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isDigit := c >= '0' && c <= '9'
+		isLowerHex := c >= 'a' && c <= 'f'
+		isUpperHex := c >= 'A' && c <= 'F'
+		if !isDigit && !isLowerHex && !isUpperHex {
+			return false
+		}
+	}
+	return true
 }
 
 // HashPasswordArgon2id hashes a password with a salt using Argon2id (for 6-digit security passwords)
@@ -92,10 +204,10 @@ func HashPasswordArgon2id(password, salt string) (string, error) {
 	hash := argon2.IDKey(
 		[]byte(password),
 		saltBytes,
-		4,                // iterations (more than the 3 used for key derivation)
-		argon2Memory,     // 64 MB memory
+		4,                 // iterations (more than the 3 used for key derivation)
+		argon2Memory,      // 64 MB memory
 		argon2Parallelism, // 4 threads
-		argon2KeyLen,     // 32 bytes output
+		argon2KeyLen,      // 32 bytes output
 	)
 
 	return base64.StdEncoding.EncodeToString(hash), nil
@@ -352,4 +464,3 @@ func DecryptDataWithKey(encryptedData string, key []byte) (string, error) {
 
 	return string(plaintext), nil
 }
-

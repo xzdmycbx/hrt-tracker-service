@@ -55,12 +55,17 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
-	// Step 3: Remove duplicate OIDC users, keeping the earliest account.
+	// Step 3: Repair common legacy password storage issues.
+	if err := repairLegacyPasswordStorage(db); err != nil {
+		return err
+	}
+
+	// Step 4: Remove duplicate OIDC users, keeping the earliest account.
 	if err := cleanupDuplicateOIDCUsers(db); err != nil {
 		return err
 	}
 
-	// Step 4: Add a partial unique index to prevent future duplicates.
+	// Step 5: Add a partial unique index to prevent future duplicates.
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_identity ON users(oidc_subject, oidc_provider) WHERE oidc_subject != '' AND oidc_provider != ''")
 
 	log.Println("Database initialized successfully")
@@ -90,7 +95,7 @@ func pragmaColumns(db *gorm.DB, table string) map[string]bool {
 // replaced with empty strings. This prevents unexpected behaviour when the
 // Go code does equality comparisons against "".
 func normalizeLegacyAuthFields(db *gorm.DB) error {
-	// Warn about users with NULL password — these would be treated as OIDC-only
+	// Warn about users with NULL password - these would be treated as OIDC-only
 	// accounts after normalization. This should never happen under normal operation;
 	// if it does, it indicates a prior migration or data-integrity issue.
 	var nullPasswordCount int64
@@ -113,6 +118,30 @@ func normalizeLegacyAuthFields(db *gorm.DB) error {
 	return nil
 }
 
+// repairLegacyPasswordStorage normalizes password field quirks found in legacy
+// datasets so they can be parsed and verified consistently by the login flow.
+func repairLegacyPasswordStorage(db *gorm.DB) error {
+	statements := []string{
+		"UPDATE users SET password = TRIM(password) WHERE password IS NOT NULL",
+		// Some manual imports used full-width colon as delimiter.
+		"UPDATE users SET password = REPLACE(password, CHAR(65306), ':') WHERE INSTR(password, CHAR(65306)) > 0",
+		// Strip CR/LF that may be introduced by CSV/manual copy operations.
+		"UPDATE users SET password = REPLACE(REPLACE(password, CHAR(13), ''), CHAR(10), '') WHERE INSTR(password, CHAR(13)) > 0 OR INSTR(password, CHAR(10)) > 0",
+	}
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+
+	var malformed int64
+	if err := db.Raw("SELECT COUNT(*) FROM users WHERE password != '' AND INSTR(password, ':') = 0").Scan(&malformed).Error; err == nil && malformed > 0 {
+		log.Printf("Migration WARNING: %d user(s) still have non-empty password fields without a ':' delimiter and may not be able to log in until repaired.", malformed)
+	}
+
+	return nil
+}
+
 // migrateOIDCColumnNames ensures the canonical column names (oidc_subject,
 // oidc_provider, oidc_email) exist on the users table.
 //
@@ -123,7 +152,7 @@ func normalizeLegacyAuthFields(db *gorm.DB) error {
 func migrateOIDCColumnNames(db *gorm.DB) error {
 	cols := pragmaColumns(db, "users")
 
-	// Mapping: canonical name → possible old GORM-generated names to check
+	// Mapping: canonical name -> possible old GORM-generated names to check
 	migrations := []struct {
 		canonical string
 		ddl       string
@@ -162,8 +191,8 @@ func migrateOIDCColumnNames(db *gorm.DB) error {
 				continue
 			}
 			res := db.Exec(
-				"UPDATE users SET "+m.canonical+" = "+old+
-					" WHERE ("+m.canonical+" IS NULL OR "+m.canonical+" = '') AND "+old+" != ''",
+				"UPDATE users SET " + m.canonical + " = " + old +
+					" WHERE (" + m.canonical + " IS NULL OR " + m.canonical + " = '') AND " + old + " != ''",
 			)
 			if res.Error != nil {
 				log.Printf("Migration warning: could not copy %q -> %q: %v", old, m.canonical, res.Error)
