@@ -60,8 +60,8 @@ func InitDB(dbPath string) error {
 		return err
 	}
 
-	// Step 4: Remove duplicate OIDC users, keeping the earliest account.
-	if err := cleanupDuplicateOIDCUsers(db); err != nil {
+	// Step 4: Detect duplicate OIDC identities (read-only, no deletion).
+	if err := warnDuplicateOIDCUsers(db); err != nil {
 		return err
 	}
 
@@ -204,53 +204,44 @@ func migrateOIDCColumnNames(db *gorm.DB) error {
 	return nil
 }
 
-// cleanupDuplicateOIDCUsers removes duplicate accounts that share the same
-// (oidc_subject, oidc_provider) pair, keeping only the account with the
-// smallest ID (earliest registration). All associated records in
-// refresh_tokens, user_data, shares, and authorizations are also removed.
-func cleanupDuplicateOIDCUsers(db *gorm.DB) error {
-	// Find all (oidc_subject, oidc_provider) groups that have more than one user
+// warnDuplicateOIDCUsers reports duplicate OIDC identities for manual handling.
+// This function is intentionally read-only and will never delete or modify user data.
+func warnDuplicateOIDCUsers(db *gorm.DB) error {
 	type dupeGroup struct {
 		OIDCSubject  string `gorm:"column:oidc_subject"`
 		OIDCProvider string `gorm:"column:oidc_provider"`
-		MinID        uint   `gorm:"column:min_id"`
+		UserCount    int64  `gorm:"column:user_count"`
 	}
+
 	var groups []dupeGroup
-	db.Raw(`
-		SELECT oidc_subject, oidc_provider, MIN(id) AS min_id
+	if err := db.Raw(`
+		SELECT oidc_subject, oidc_provider, COUNT(*) AS user_count
 		FROM users
 		WHERE oidc_subject != '' AND oidc_provider != ''
 		GROUP BY oidc_subject, oidc_provider
 		HAVING COUNT(*) > 1
-	`).Scan(&groups)
+	`).Scan(&groups).Error; err != nil {
+		return err
+	}
 
 	if len(groups) == 0 {
 		return nil
 	}
 
 	for _, g := range groups {
-		// Collect IDs of the duplicate accounts (everyone except the earliest)
-		var dupIDs []uint
-		db.Raw(`
+		var userIDs []uint
+		if err := db.Raw(`
 			SELECT id FROM users
-			WHERE oidc_subject = ? AND oidc_provider = ? AND id != ?
-		`, g.OIDCSubject, g.OIDCProvider, g.MinID).Scan(&dupIDs)
-
-		if len(dupIDs) == 0 {
-			continue
+			WHERE oidc_subject = ? AND oidc_provider = ?
+			ORDER BY id ASC
+		`, g.OIDCSubject, g.OIDCProvider).Scan(&userIDs).Error; err != nil {
+			return err
 		}
 
-		// Cascade-delete associated records
-		db.Where("user_id IN ?", dupIDs).Delete(&models.RefreshToken{})
-		db.Where("user_id IN ?", dupIDs).Delete(&models.UserData{})
-		db.Where("user_id IN ?", dupIDs).Delete(&models.Share{})
-		db.Where("owner_id IN ? OR viewer_id IN ?", dupIDs, dupIDs).Delete(&models.Authorization{})
-
-		// Delete the duplicate user records
-		result := db.Where("id IN ?", dupIDs).Delete(&models.User{})
-
-		log.Printf("Migration: removed %d duplicate OIDC user(s) for subject %q (kept user ID %d)",
-			result.RowsAffected, g.OIDCSubject, g.MinID)
+		log.Printf(
+			"Migration WARNING: detected duplicate OIDC identity subject=%q provider=%q count=%d user_ids=%v. No deletion is performed; please resolve manually.",
+			g.OIDCSubject, g.OIDCProvider, g.UserCount, userIDs,
+		)
 	}
 
 	return nil
