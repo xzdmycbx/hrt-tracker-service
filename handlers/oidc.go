@@ -414,7 +414,6 @@ func OIDCCallback(c *gin.Context) {
 
 	var resultUser models.User
 	isNewUser := false
-	var newUsername string
 
 	txErr := db.Transaction(func(tx *gorm.DB) error {
 		// Find existing user by OIDC subject (inside transaction to prevent race)
@@ -471,7 +470,6 @@ func OIDCCallback(c *gin.Context) {
 		}
 
 		resultUser = newUser
-		newUsername = newUser.Username
 		isNewUser = true
 		return nil
 	})
@@ -494,9 +492,7 @@ func OIDCCallback(c *gin.Context) {
 	resp := map[string]interface{}{
 		"tokens":      tokens,
 		"is_new_user": isNewUser,
-	}
-	if isNewUser {
-		resp["username"] = newUsername
+		"username":    resultUser.Username,
 	}
 	utils.SuccessResponse(c, resp)
 }
@@ -596,7 +592,7 @@ func OIDCBindCallback(c *gin.Context) {
 			bindErr = "User not found"
 			return errors.New(bindErr)
 		}
-		if user.OIDCSubject != "" {
+		if user.OIDCSubject != "" && user.OIDCProvider != "" {
 			bindErr = "An OIDC identity is already linked to this account"
 			return errors.New(bindErr)
 		}
@@ -630,11 +626,12 @@ func OIDCBindStatus(c *gin.Context) {
 		return
 	}
 
+	isOIDCBound := user.OIDCSubject != "" && user.OIDCProvider != ""
 	data := map[string]interface{}{
-		"bound":        user.OIDCSubject != "",
+		"bound":        isOIDCBound,
 		"has_password": user.Password != "",
 	}
-	if user.OIDCSubject != "" {
+	if isOIDCBound {
 		data["oidc_subject"] = user.OIDCSubject
 		data["oidc_email"] = user.OIDCEmail
 		data["provider"] = user.OIDCProvider

@@ -90,6 +90,14 @@ func pragmaColumns(db *gorm.DB, table string) map[string]bool {
 // replaced with empty strings. This prevents unexpected behaviour when the
 // Go code does equality comparisons against "".
 func normalizeLegacyAuthFields(db *gorm.DB) error {
+	// Warn about users with NULL password — these would be treated as OIDC-only
+	// accounts after normalization. This should never happen under normal operation;
+	// if it does, it indicates a prior migration or data-integrity issue.
+	var nullPasswordCount int64
+	if err := db.Raw("SELECT COUNT(*) FROM users WHERE password IS NULL").Scan(&nullPasswordCount).Error; err == nil && nullPasswordCount > 0 {
+		log.Printf("Migration WARNING: %d user(s) have a NULL password field. They will be normalized to empty string (OIDC-only). If these users did not intend to be OIDC-only and have no OIDC identity linked, they will be locked out and require administrator intervention to restore access.", nullPasswordCount)
+	}
+
 	statements := []string{
 		"UPDATE users SET password = '' WHERE password IS NULL",
 		"UPDATE users SET oidc_subject = '' WHERE oidc_subject IS NULL",

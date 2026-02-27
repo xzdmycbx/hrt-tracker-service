@@ -258,7 +258,7 @@ func Login(c *gin.Context) {
 		AccessToken:      accessToken,
 		RefreshToken:     refreshToken,
 		ExpiresIn:        config.AppConfig.AccessTokenExpireHours * 3600,
-		RequiresOIDCBind: config.AppConfig.RegistrationDisabled, // registration disabled → must bind OIDC
+		RequiresOIDCBind: config.AppConfig.RegistrationDisabled && !isOIDCBound,
 	})
 }
 
@@ -481,7 +481,7 @@ func ChangePassword(c *gin.Context) {
 
 // Helper: Extract salt and hash from stored password
 func extractSaltAndHash(password string) (string, string, error) {
-	parts := strings.Split(password, ":")
+	parts := strings.SplitN(password, ":", 2)
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("invalid password format")
 	}
@@ -565,8 +565,9 @@ func RemoveLoginPassword(c *gin.Context) {
 		return
 	}
 
-	// Require OIDC binding before removing password (prevents lockout)
-	if user.OIDCSubject == "" {
+	// Require a fully-bound OIDC identity (both subject and provider must be set)
+	// before allowing password removal, to prevent account lockout.
+	if user.OIDCSubject == "" || user.OIDCProvider == "" {
 		utils.BadRequestResponse(c, "Cannot remove login password without an OIDC identity linked. Please link an OIDC account first.")
 		return
 	}
