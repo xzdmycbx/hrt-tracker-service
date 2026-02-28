@@ -142,7 +142,10 @@ func Register(c *gin.Context) {
 		IPAddress:  ipAddress,
 		LastUsedAt: time.Now(),
 	}
-	db.Create(&refreshTokenModel)
+	if err := db.Create(&refreshTokenModel).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to create session")
+		return
+	}
 
 	utils.SuccessResponse(c, TokenResponse{
 		AccessToken:  accessToken,
@@ -252,7 +255,10 @@ func Login(c *gin.Context) {
 		IPAddress:  ipAddress,
 		LastUsedAt: time.Now(),
 	}
-	db.Create(&refreshTokenModel)
+	if err := db.Create(&refreshTokenModel).Error; err != nil {
+		utils.InternalErrorResponse(c, "Failed to create session")
+		return
+	}
 
 	utils.SuccessResponse(c, TokenResponse{
 		AccessToken:      accessToken,
@@ -270,8 +276,10 @@ func RefreshToken(c *gin.Context) {
 		return
 	}
 
+	refreshToken := strings.TrimSpace(req.RefreshToken)
+
 	// Validate refresh token
-	claims, err := utils.ValidateRefreshToken(req.RefreshToken)
+	claims, err := utils.ValidateRefreshToken(refreshToken)
 	if err != nil {
 		utils.UnauthorizedResponse(c, "Invalid refresh token")
 		return
@@ -279,51 +287,67 @@ func RefreshToken(c *gin.Context) {
 
 	db := database.GetDB()
 
-	// Check if refresh token exists in database (compare hashed tokens)
-	var tokenModel models.RefreshToken
-	hashedToken := utils.HashRefreshToken(req.RefreshToken)
-	if err := db.Where("token = ? AND user_id = ?", hashedToken, claims.UserID).First(&tokenModel).Error; err != nil {
-		utils.UnauthorizedResponse(c, "Invalid refresh token")
-		return
-	}
+	hashedToken := utils.HashRefreshToken(refreshToken)
+	var resp TokenResponse
 
-	// Preserve session information from old token
-	sessionID := tokenModel.SessionID
-	deviceInfo := tokenModel.DeviceInfo
-	ipAddress := tokenModel.IPAddress
+	err = db.Transaction(func(tx *gorm.DB) error {
+		// Check if refresh token exists in database (compare hashed tokens)
+		var tokenModel models.RefreshToken
+		if err := tx.Where("token = ? AND user_id = ?", hashedToken, claims.UserID).First(&tokenModel).Error; err != nil {
+			return err
+		}
 
-	// Delete old refresh token
-	db.Delete(&tokenModel)
+		// Delete old refresh token and ensure it was consumed exactly once.
+		delRes := tx.Where("id = ?", tokenModel.ID).Delete(&models.RefreshToken{})
+		if delRes.Error != nil {
+			return delRes.Error
+		}
+		if delRes.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
 
-	// Generate new tokens with preserved session ID
-	accessToken, err := utils.GenerateAccessToken(claims.UserID, sessionID)
-	if err != nil {
-		utils.InternalErrorResponse(c, "Failed to generate access token")
-		return
-	}
-	newRefreshToken, err := utils.GenerateRefreshToken(claims.UserID)
-	if err != nil {
-		utils.InternalErrorResponse(c, "Failed to generate refresh token")
-		return
-	}
+		// Generate new tokens with preserved session ID
+		accessToken, err := utils.GenerateAccessToken(claims.UserID, tokenModel.SessionID)
+		if err != nil {
+			return err
+		}
+		newRefreshToken, err := utils.GenerateRefreshToken(claims.UserID)
+		if err != nil {
+			return err
+		}
 
-	// Store new refresh token (hashed) with preserved session info and updated LastUsedAt
-	newTokenModel := models.RefreshToken{
-		UserID:     claims.UserID,
-		Token:      utils.HashRefreshToken(newRefreshToken),
-		ExpiresAt:  time.Time{},
-		SessionID:  sessionID,
-		DeviceInfo: deviceInfo,
-		IPAddress:  ipAddress,
-		LastUsedAt: time.Now(),
-	}
-	db.Create(&newTokenModel)
+		// Store new refresh token (hashed) with preserved session info and updated LastUsedAt
+		newTokenModel := models.RefreshToken{
+			UserID:     claims.UserID,
+			Token:      utils.HashRefreshToken(newRefreshToken),
+			ExpiresAt:  time.Time{},
+			SessionID:  tokenModel.SessionID,
+			DeviceInfo: tokenModel.DeviceInfo,
+			IPAddress:  tokenModel.IPAddress,
+			LastUsedAt: time.Now(),
+		}
+		if err := tx.Create(&newTokenModel).Error; err != nil {
+			return err
+		}
 
-	utils.SuccessResponse(c, TokenResponse{
-		AccessToken:  accessToken,
-		RefreshToken: newRefreshToken,
-		ExpiresIn:    config.AppConfig.AccessTokenExpireHours * 3600,
+		resp = TokenResponse{
+			AccessToken:  accessToken,
+			RefreshToken: newRefreshToken,
+			ExpiresIn:    config.AppConfig.AccessTokenExpireHours * 3600,
+		}
+		return nil
 	})
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			utils.UnauthorizedResponse(c, "Invalid refresh token")
+		} else {
+			utils.InternalErrorResponse(c, "Failed to refresh token")
+		}
+		return
+	}
+
+	utils.SuccessResponse(c, resp)
 }
 
 // Helper: Generate SessionID (UUID v4)

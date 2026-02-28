@@ -314,7 +314,9 @@ func createSessionAndTokens(c *gin.Context, userID uint) (*TokenResponse, error)
 		IPAddress:  ipAddress,
 		LastUsedAt: time.Now(),
 	}
-	db.Create(&tokenModel)
+	if err := db.Create(&tokenModel).Error; err != nil {
+		return nil, err
+	}
 
 	return &TokenResponse{
 		AccessToken:  accessToken,
