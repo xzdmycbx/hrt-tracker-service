@@ -370,7 +370,7 @@ func ViewShare(c *gin.Context) {
 	}
 
 	var owner models.User
-	if err := db.Select("username", "avatar", "security_password_hash").First(&owner, share.UserID).Error; err != nil {
+	if err := db.Select("username", "avatar", "oidc_display_name", "oidc_picture_url", "security_password_hash").First(&owner, share.UserID).Error; err != nil {
 		utils.InternalErrorResponse(c, "Failed to load share owner")
 		return
 	}
@@ -380,9 +380,19 @@ func ViewShare(c *gin.Context) {
 		return
 	}
 
+	// Determine display name: OIDC name > username
+	ownerDisplayName := owner.OIDCDisplayName
+	if ownerDisplayName == "" {
+		ownerDisplayName = owner.Username
+	}
+	// Determine avatar URL: OIDC picture URL > uploaded avatar path
+	ownerAvatarURL := owner.OIDCPictureURL
+
 	baseResponse := map[string]interface{}{
-		"owner_username": owner.Username,
-		"owner_avatar":   owner.Avatar,
+		"owner_username":     owner.Username,
+		"owner_display_name": ownerDisplayName,
+		"owner_avatar":       owner.Avatar,
+		"owner_avatar_url":   ownerAvatarURL,
 	}
 
 	// Get data based on share type

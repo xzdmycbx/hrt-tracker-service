@@ -141,6 +141,7 @@ type oidcUserInfo struct {
 	Email             string `json:"email"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
+	Picture           string `json:"picture"`
 }
 
 func exchangeOIDCCode(tokenEndpoint, code string) (*oidcTokenResponse, error) {
@@ -421,6 +422,12 @@ func OIDCCallback(c *gin.Context) {
 		// Find existing user by OIDC subject (inside transaction to prevent race)
 		var existing models.User
 		if err := tx.Where("oidc_subject = ? AND oidc_provider = ?", userInfo.Sub, providerID).First(&existing).Error; err == nil {
+			// Update display name and picture URL on every login
+			existing.OIDCDisplayName = userInfo.Name
+			existing.OIDCPictureURL = userInfo.Picture
+			if saveErr := tx.Save(&existing).Error; saveErr != nil {
+				return fmt.Errorf("failed to update user profile: %w", saveErr)
+			}
 			resultUser = existing
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -435,11 +442,13 @@ func OIDCCallback(c *gin.Context) {
 		// Generate candidate username (email local part first)
 		baseUsername := generateUsernameFromOIDC(userInfo)
 		newUser := models.User{
-			Username:     baseUsername,
-			Password:     "", // OIDC-only account
-			OIDCSubject:  userInfo.Sub,
-			OIDCProvider: providerID,
-			OIDCEmail:    userInfo.Email,
+			Username:        baseUsername,
+			Password:        "", // OIDC-only account
+			OIDCSubject:     userInfo.Sub,
+			OIDCProvider:    providerID,
+			OIDCEmail:       userInfo.Email,
+			OIDCDisplayName: userInfo.Name,
+			OIDCPictureURL:  userInfo.Picture,
 		}
 
 		// Attempt INSERT with retry on username uniqueness conflict
@@ -492,9 +501,11 @@ func OIDCCallback(c *gin.Context) {
 	}
 
 	resp := map[string]interface{}{
-		"tokens":      tokens,
-		"is_new_user": isNewUser,
-		"username":    resultUser.Username,
+		"tokens":       tokens,
+		"is_new_user":  isNewUser,
+		"username":     resultUser.Username,
+		"display_name": resultUser.OIDCDisplayName,
+		"avatar_url":   resultUser.OIDCPictureURL,
 	}
 	utils.SuccessResponse(c, resp)
 }
@@ -602,6 +613,8 @@ func OIDCBindCallback(c *gin.Context) {
 		user.OIDCSubject = userInfo.Sub
 		user.OIDCProvider = providerID
 		user.OIDCEmail = userInfo.Email
+		user.OIDCDisplayName = userInfo.Name
+		user.OIDCPictureURL = userInfo.Picture
 		return tx.Save(&user).Error
 	})
 

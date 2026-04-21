@@ -24,9 +24,11 @@ type User struct {
 	// OIDC/OAuth2 fields (permanent once set — unbinding is not supported)
 	// Partial unique index on (oidc_subject, oidc_provider) is created by database.go
 	// to exclude empty-string rows (SQLite partial index).
-	OIDCSubject  string `gorm:"column:oidc_subject;index:idx_oidc_identity" json:"-"` // OIDC sub claim (unique identifier at provider)
-	OIDCProvider string `gorm:"column:oidc_provider;index:idx_oidc_identity" json:"-"` // Provider base URL
-	OIDCEmail    string `gorm:"column:oidc_email" json:"-"`                             // Email from OIDC userinfo (for display purposes)
+	OIDCSubject      string `gorm:"column:oidc_subject;index:idx_oidc_identity" json:"-"` // OIDC sub claim (unique identifier at provider)
+	OIDCProvider     string `gorm:"column:oidc_provider;index:idx_oidc_identity" json:"-"` // Provider base URL
+	OIDCEmail        string `gorm:"column:oidc_email" json:"-"`                             // Email from OIDC userinfo (for display purposes)
+	OIDCDisplayName  string `gorm:"column:oidc_display_name" json:"-"`                      // Display name from OIDC userinfo (name claim)
+	OIDCPictureURL   string `gorm:"column:oidc_picture_url" json:"-"`                       // Profile picture URL from OIDC userinfo (picture claim)
 
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
